@@ -67,6 +67,23 @@ for the implementation, private receipt format, tests, and remaining GUI blocker
 Accept concise structured ordinary replies without a minimum character count;
 use source, requested-artifact, and coverage gates to assess actual completion.
 
+The optional OverTree personal-WeChat group route is a transport-only Cloud
+adapter. Keep it off by default and require both the local feature flag and an
+exact `WECHAT_PERSONAL_GROUP_ALLOWLIST` ID; never broaden it to every group on
+the account. Require the configured `self_wxid` and an exact send-title guard
+so the Agent's own replies cannot become input and a GUI send cannot target an
+unrelated conversation. Each group gets a unique private monitor state file.
+The enabled branch must route only to the isolated Cloud personal-group HMAC
+namespace and must not fall through to the local Agent, WeCom, or Customer
+Service route. Keep Cloud `/internal/*` private behind VPN/SSH access. Media
+intake must use tokens from the exact message and reject mtime-only or nearby
+file matches. Preserve failed outbound sends in the per-group state outbox;
+keep binding-code recovery idempotent so a committed Cloud claim is never
+forwarded into the customer's conversation after a lost response. This uses
+the operator's personal WeChat account and is not an official Tencent bot API;
+do not promise zero account risk. See the
+[Cloud coaching-group guide](../../../docs/WECHAT_PERSONAL_GROUP_CLOUD.md).
+
 ## Operating Model
 
 Treat WeChat as a communication bridge, not as the executor. A WeChat message

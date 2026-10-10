@@ -176,6 +176,17 @@ The external authorization guard must use only the dedicated WeCom admin browser
 The paired owner may enroll a WeCom group; trusted members of that exact group may request research, paper/PDF, figure, CAD/PCB, Blender, and design artifact work with the same worker permissions as the private LazyResearch group. LabAgent does not perform video publication or other public posting. Soft-filter dangerous or out-of-scope requests through the route agent, while retaining hard exact-chat/source isolation and existing approval gates for sensitive actions. `#daily <topic>` stores a private per-member research preference and immediately queues one idempotent first briefing in addition to future scheduled reports. Daily tasks have no queue deadline, use dynamic GPT-5.6 SOL effort, and return Markdown plus a LaTeX-compiled Nature-style PDF. If the backend stops after writing a complete exact-task report, recover and deliver those artifacts without rerunning the research or replaying the acknowledgement.
 When changing WeChat automation behavior, also update `agentic_tools/wechat_gui_agent/docs/ROBUST_EFFICIENT_OPERATIONS.md`. Treat it as the reliability contract for per-chat isolation, token-efficient routing, queue states, artifact delivery gates, and recovery playbooks.
 
+The optional OverTree personal-WeChat group route remains disabled until a real
+test group passes acceptance. It must use the direct monitor's isolated Cloud
+branch, a unique private state file, exact group-ID allowlist, exact `self_wxid`,
+and exact GUI title guard. Never fall through to the local Agent or share the
+WeCom/Customer Service credentials, state, or source resolver. Keep Cloud
+`/internal/*` routes private over VPN/SSH; restrict media uploads to files
+matched by the current message's own media tokens. Preserve retry state for
+Cloud requests and group sends, and never forward a one-time binding code into
+the Cloud session after an uncertain claim response. Document updates belong
+in both `README.md` and `agentic_tools/wechat_gui_agent/docs/ROBUST_EFFICIENT_OPERATIONS.md`.
+
 ## Commit & Pull Request Guidelines
 
 Use concise imperative commit messages, such as `Add Unity target validation` or `Document BioRender MCP setup`. Pull requests should include a summary, testing performed, linked issues when applicable, and screenshots only for UI-facing changes.

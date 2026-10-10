@@ -52,6 +52,23 @@ AgInTi LabCanvas is a small local control plane for agent-assisted scientific vi
 | Social content agent | Persistent Codex campaigns, source-grounded platform drafts, SQLite history, Postiz/X MCP adapters, and exact-content publication approvals | [agentic_tools/social_content_agent](agentic_tools/social_content_agent) |
 | App routing | Blender, BioRender, Unity, Unreal, and custom target dispatch | [docs/RESEARCH.md](docs/RESEARCH.md) |
 
+## Optional OverTree personal-WeChat coaching groups
+
+LabCanvas can run one exact, allowlisted WeChat group as a transport into an
+OverTree Cloud project/session. The operator's personal WeChat remains the
+visible Agent account; each group still has a separate Cloud binding, session,
+history, and project boundary. The existing direct-chat monitor bypasses its
+local Agent only when that group's private config explicitly enables
+`personal_group_cloud.enabled` and the exact group ID also appears in
+`WECHAT_PERSONAL_GROUP_ALLOWLIST`.
+
+Keep both `CLOUD_WECHAT_PERSONAL_GROUP_ENABLED` in Cloud and
+`WECHAT_PERSONAL_GROUP_ENABLED` in LabCanvas disabled until the isolated
+acceptance checks pass. The adapter calls Cloud's separate HMAC-signed
+`/internal/wechat/personal-groups/v1/*` routes over a private VPN or SSH tunnel;
+never expose `/internal/*` on the public reverse proxy. See the [setup,
+configuration, and acceptance guide](docs/WECHAT_PERSONAL_GROUP_CLOUD.md).
+
 ## Quick Start
 
 ### Model Policy

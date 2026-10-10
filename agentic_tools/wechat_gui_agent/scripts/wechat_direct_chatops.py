@@ -46,6 +46,11 @@ from wechat_message_policy import (
 from wechat_chat_profiles import profile_aliases, profile_for_chat, public_video_publication_enabled
 from wechat_mirror import DEFAULT_DB, record_event
 from wechat_native_text_delivery import pending_outbound_echo
+from wechat_personal_group_cloud import (
+    PersonalGroupCloudError,
+    personal_group_cloud_enabled,
+    run_once as run_personal_group_cloud_once,
+)
 from wechat_message_shards import (
     list_message_db_paths,
     message_db_has_table,
@@ -279,6 +284,7 @@ def load_config(path: Path) -> dict[str, Any]:
         "history_limit": 24,
         "coalesce_new_messages": True,
         "respond_to_all": False,
+        "personal_group_cloud": {"enabled": False},
         "respond_to_self": False,
         "ignore_self_messages": True,
         "allow_human_self_messages": False,
@@ -523,6 +529,50 @@ def run_once(config: dict[str, Any], state: dict[str, Any], *, send: bool, no_de
     for row in new_rows:
         sync_row_to_mirror(config, row)
     checkpoint_inbound_before_route(config, state, new_rows, metrics)
+    if personal_group_cloud_enabled(config):
+        target = config.get("send_target") if isinstance(config.get("send_target"), dict) else {}
+        if not str(config.get("self_wxid") or "").strip():
+            raise PersonalGroupCloudError("Personal-group Cloud mode requires the Agent account's exact self_wxid.")
+        target_name = str(target.get("name") or "").strip()
+        chat_name = str(config.get("chat_name") or "").strip()
+        expected_title = str(target.get("expected_title") or "").strip()
+        if not target_name or (not expected_title and not target.get("expected_title_aliases")):
+            raise PersonalGroupCloudError("Personal-group Cloud mode requires a send_target with an exact expected group title.")
+        if target_name != chat_name:
+            raise PersonalGroupCloudError("Personal-group Cloud mode requires send_target.name to exactly match this group's chat_name.")
+        started = time.monotonic()
+        result = run_personal_group_cloud_once(
+            config,
+            state,
+            new_rows,
+            send=send,
+            inbound=lambda row: is_inbound_user_row(config, row),
+            eligible=lambda row: is_inbound_user_row(config, row) and not response_already_recorded(state, row),
+            visible_text=visible_message_text,
+            send_text=send_gui_message,
+        )
+        if new_rows:
+            advance_message_db_cursors(state, new_rows)
+            active_db = normalized_message_db_name(state.get("active_message_db")) or "message_0.db"
+            state["last_local_id"] = message_db_cursors(state).get(active_db, int(state.get("last_local_id") or 0))
+            state["last_seen_at"] = datetime.now().isoformat(timespec="seconds")
+            clear_inflight_messages(state, new_rows)
+        finish_force_replay(state, metrics)
+        metrics.update(result.get("metrics") if isinstance(result.get("metrics"), dict) else {})
+        metrics["personal_group_cloud_ms"] = elapsed_ms(started)
+        metrics["total_ms"] = elapsed_ms(loop_started)
+        state["last_loop_at"] = datetime.now().isoformat(timespec="seconds")
+        state["last_loop_metrics"] = metrics
+        return {
+            "new_rows": len(new_rows),
+            "response_sent": result.get("response_sent"),
+            "responses_sent": 1 if result.get("response_sent") else 0,
+            "task_enqueued": result.get("task_enqueued"),
+            "tasks_enqueued": 1 if result.get("task_enqueued") else 0,
+            "processed_local_id": max((int(row.get("local_id") or 0) for row in new_rows), default=None),
+            "metrics": metrics,
+            "state": result.get("state", state),
+        }
     organizer_result: dict[str, Any] = {}
     if new_rows and organizer_enabled(config):
         started = time.monotonic()
