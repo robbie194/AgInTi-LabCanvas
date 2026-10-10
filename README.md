@@ -60,7 +60,10 @@ visible Agent account; each group still has a separate Cloud binding, session,
 history, and project boundary. The existing direct-chat monitor bypasses its
 local Agent only when that group's private config explicitly enables
 `personal_group_cloud.enabled` and the exact group ID also appears in
-`WECHAT_PERSONAL_GROUP_ALLOWLIST`.
+`WECHAT_PERSONAL_GROUP_ALLOWLIST`. Only messages that explicitly @mention the
+configured Agent name enter the Cloud session; ordinary human group chat stays
+in WeChat. A one-time binding code may be sent without a mention before the
+group is connected.
 
 Keep both `CLOUD_WECHAT_PERSONAL_GROUP_ENABLED` in Cloud and
 `WECHAT_PERSONAL_GROUP_ENABLED` in LabCanvas disabled until the isolated

@@ -73,6 +73,10 @@ exact `WECHAT_PERSONAL_GROUP_ALLOWLIST` ID; never broaden it to every group on
 the account. Require the configured `self_wxid` and an exact send-title guard
 so the Agent's own replies cannot become input and a GUI send cannot target an
 unrelated conversation. Each group gets a unique private monitor state file.
+Require explicit configured `@Agent` mention prefixes for Cloud turns; only a
+one-time binding code may enter before binding without a mention. Ordinary
+customer/support small talk stays local to WeChat and must not start an Agent
+run.
 The enabled branch must route only to the isolated Cloud personal-group HMAC
 namespace and must not fall through to the local Agent, WeCom, or Customer
 Service route. Keep Cloud `/internal/*` private behind VPN/SSH access. Media

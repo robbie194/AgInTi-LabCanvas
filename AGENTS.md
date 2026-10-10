@@ -179,7 +179,9 @@ When changing WeChat automation behavior, also update `agentic_tools/wechat_gui_
 The optional OverTree personal-WeChat group route remains disabled until a real
 test group passes acceptance. It must use the direct monitor's isolated Cloud
 branch, a unique private state file, exact group-ID allowlist, exact `self_wxid`,
-and exact GUI title guard. Never fall through to the local Agent or share the
+exact Agent @mention trigger, and exact GUI title guard. Only explicit mentions
+and a pre-binding one-time code may enter Cloud; ordinary human group chat must
+not trigger the Agent. Never fall through to the local Agent or share the
 WeCom/Customer Service credentials, state, or source resolver. Keep Cloud
 `/internal/*` routes private over VPN/SSH; restrict media uploads to files
 matched by the current message's own media tokens. Preserve retry state for

@@ -210,6 +210,21 @@ def binding_code(text: str) -> str:
     return match.group(1).upper() if match else ""
 
 
+def personal_group_trigger_prefixes(config: dict[str, Any]) -> list[str]:
+    block = config.get("personal_group_cloud") if isinstance(config.get("personal_group_cloud"), dict) else {}
+    raw = block.get("trigger_prefixes", [])
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
+def personal_group_message_is_addressed(config: dict[str, Any], row: dict[str, Any],
+                                        visible_text: Callable[[dict[str, Any]], str]) -> bool:
+    prefixes = personal_group_trigger_prefixes(config)
+    text = str(visible_text(row) or "").casefold()
+    return any(prefix.casefold() in text for prefix in prefixes)
+
+
 def _send(send_text: Callable[..., Any], config: dict[str, Any], state: dict[str, Any], text: str, source: dict[str, Any], kind: str) -> None:
     send_config = dict(config)
     send_config["_android_task_id"] = f"cloud-{kind}-" + hashlib.sha256(
@@ -491,6 +506,9 @@ def run_once(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str,
         raise PersonalGroupCloudError("Personal-group Cloud mode requires the guarded --send transport.")
     client, group_id = client_factory(config)
     _claim_private_group_state(config, state, group_id)
+    prefixes = personal_group_trigger_prefixes(config)
+    if not prefixes or any(not prefix.startswith(("@", "＠")) or len(prefix) < 2 for prefix in prefixes):
+        raise PersonalGroupCloudError("Personal-group Cloud mode requires the exact Agent @mention prefix in personal_group_cloud.trigger_prefixes.")
     now = time.time()
     pending = state.setdefault("personal_group_cloud_pending", [])
     outbox = state.setdefault("personal_group_cloud_outbox", [])
@@ -578,7 +596,7 @@ def run_once(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str,
     # checkpointed claim ID lets the next pass recognize the now-bound group
     # without forwarding the one-time code into the user conversation.
     if resolved_binding and attempted_claims:
-        for row in trigger_rows:
+        for row in inbound_rows:
             message_id = stable_message_id(row)
             if message_id not in attempted_claims:
                 continue
@@ -589,7 +607,7 @@ def run_once(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str,
 
     # A one-time Cloud binding code may arrive as a bare code or "绑定 CODE".
     if not resolved_binding:
-        for row in trigger_rows:
+        for row in inbound_rows:
             code = binding_code(visible_text(row))
             if not code:
                 continue
@@ -621,7 +639,11 @@ def run_once(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str,
                 "state": state,
             }
 
-    trigger_rows = [row for row in trigger_rows if stable_message_id(row) not in handled_binding_ids]
+    trigger_rows = [
+        row for row in trigger_rows
+        if stable_message_id(row) not in handled_binding_ids
+        and personal_group_message_is_addressed(config, row, visible_text)
+    ]
 
     # Queue each sender separately so Cloud stores accurate author attribution.
     known_ids = {str(item.get("messageId") or "") for item in pending}

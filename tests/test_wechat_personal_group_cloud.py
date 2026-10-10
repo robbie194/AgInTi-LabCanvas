@@ -83,6 +83,7 @@ class PersonalGroupCloudTests(unittest.TestCase):
             "personal_group_cloud": {
                 "enabled": enabled,
                 "support_member_sha256": [hashlib.sha256(b"support-wxid").hexdigest()],
+                "trigger_prefixes": ["@OverTree", "＠OverTree"],
             },
         }
 
@@ -186,7 +187,7 @@ class PersonalGroupCloudTests(unittest.TestCase):
 
     def test_submits_sender_attribution_and_never_submits_agent_echo(self):
         client = FakeClient()
-        support = self.row(7, "support-wxid", "补充一个背景")
+        support = self.row(7, "support-wxid", "@OverTree 补充一个背景")
         echo = self.row(8, "agent-wxid", "OverTree answer")
         sent = []
         result = self.run_once(
@@ -198,25 +199,25 @@ class PersonalGroupCloudTests(unittest.TestCase):
         message = client.submitted[0][1]
         self.assertEqual(message["actorRole"], "support_member")
         self.assertEqual(message["actorId"], "support-wxid")
-        self.assertEqual(message["content"], "补充一个背景")
+        self.assertEqual(message["content"], "@OverTree 补充一个背景")
         self.assertEqual(result["metrics"]["pending"], 1)
         self.assertFalse(sent)
 
     def test_claim_code_and_next_same_poll_message_are_both_processed(self):
         client = FakeClient(bound=False)
         code = self.row(9, "customer-wxid", "ABC23456")
-        followup = self.row(10, "customer-wxid", "我想分析这个项目")
+        followup = self.row(10, "customer-wxid", "@OverTree 我想分析这个项目")
         sent = []
         result = self.run_once(client, [code, followup], send_text=lambda _config, text: sent.append(text))
         self.assertEqual(client.claimed, [("group-exact-1", "ABC23456")])
         self.assertEqual(len(client.submitted), 1)
-        self.assertEqual(client.submitted[0][1]["content"], "我想分析这个项目")
+        self.assertEqual(client.submitted[0][1]["content"], "@OverTree 我想分析这个项目")
         self.assertEqual(sent, ["此群已连接到对应的 OverTree 项目和会话。客户与已登记客服的消息会进入同一会话。"])
         self.assertEqual(result["metrics"]["transport"], "personal_group_cloud")
 
     def test_exact_media_file_is_uploaded_before_cloud_message_submission(self):
         client = FakeClient()
-        row = self.row(11, "customer-wxid", "[WeChat image]", local_type=3)
+        row = self.row(11, "customer-wxid", "@OverTree [WeChat image]", local_type=3)
         with tempfile.TemporaryDirectory() as folder:
             image = Path(folder) / "source.png"
             image.write_bytes(b"exact-image")
@@ -227,6 +228,18 @@ class PersonalGroupCloudTests(unittest.TestCase):
         attachments = client.submitted[0][1]["attachments"]
         self.assertEqual(attachments[0]["path"], "wechat-inbox/binding/0-source.png")
         self.assertEqual(attachments[0]["contentType"], "image/png")
+
+    def test_ordinary_group_chat_is_ignored_until_someone_mentions_the_agent(self):
+        client = FakeClient()
+        ordinary = self.row(15, "customer-wxid", "客服，我刚才把报告发你了")
+        result = self.run_once(client, [ordinary])
+        self.assertFalse(client.submitted)
+        self.assertEqual(result["metrics"]["pending"], 0)
+
+        addressed = self.row(16, "customer-wxid", "＠OverTree 请帮我看看这张图")
+        self.run_once(client, [addressed])
+        self.assertEqual(len(client.submitted), 1)
+        self.assertIn("＠OverTree", client.submitted[0][1]["content"])
 
     def test_terminal_result_is_delivered_and_pending_item_is_cleared(self):
         client = FakeClient(receipt={"status": "finished", "result": "已完成", "files": [{"url": "https://cloud.example/result.pdf"}]})
@@ -320,12 +333,28 @@ class PersonalGroupCloudTests(unittest.TestCase):
             bridge._claim_private_group_state(config, state, "group-exact-1")
             with self.assertRaisesRegex(bridge.PersonalGroupCloudError, "different WeChat group"):
                 bridge._claim_private_group_state(config, state, "another-group")
+            with self.assertRaisesRegex(bridge.PersonalGroupCloudError, "already assigned"):
+                bridge._claim_private_group_state(config, {}, "another-group")
 
         with tempfile.TemporaryDirectory() as folder:
             config = self.config()
             config["_runtime_state_path"] = str(Path(folder) / "public.state.json")
             with self.assertRaisesRegex(bridge.PersonalGroupCloudError, "private directory"):
                 bridge._claim_private_group_state(config, {}, "group-exact-1")
+
+    def test_group_trigger_prefix_must_be_an_explicit_at_mention(self):
+        config = self.config()
+        config["personal_group_cloud"]["trigger_prefixes"] = "@OverTree"
+        with self.assertRaises(bridge.PersonalGroupCloudError):
+            bridge.PRIVATE.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(dir=bridge.PRIVATE) as folder:
+                config["_runtime_state_path"] = str(Path(folder) / "group.state.json")
+                bridge.run_once(
+                    config, {}, [], send=True,
+                    eligible=lambda _row: True, inbound=lambda _row: True,
+                    visible_text=lambda row: row["content"], send_text=lambda _config, _text: None,
+                    client_factory=lambda _config: (FakeClient(), "group-exact-1"),
+                )
 
     def test_direct_monitor_routes_enabled_group_to_cloud_without_running_local_agent(self):
         app = types.ModuleType("agenticapp")

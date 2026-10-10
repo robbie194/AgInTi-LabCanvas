@@ -117,6 +117,7 @@ normal local WeChat database and GUI settings:
   },
   "personal_group_cloud": {
     "enabled": true,
+    "trigger_prefixes": ["@你的微信昵称", "＠你的微信昵称"],
     "support_member_sha256": [],
     "timeout_seconds": 20,
     "media_sync_timeout_seconds": 30
@@ -130,6 +131,12 @@ sender requires the exact expected group title and remains guarded by its
 existing visible-client/title checks. Keep one unique `state_path` per group;
 the adapter enforces that it is inside `.private`, records its owning group,
 and refuses to reuse it for another group.
+Set both `trigger_prefixes` to the exact visible name used when group members
+mention the Agent. Only messages containing that mention enter the Cloud
+session, whether written by the customer or a registered support member.
+Unrelated group conversation stays in WeChat. A one-time binding code is the
+only message accepted before the group is bound and may be sent without a
+mention.
 For staff role attribution, place SHA-256 hashes of registered support-member
 WeChat IDs in `support_member_sha256`; never put raw support IDs in the checked-in
 file.
