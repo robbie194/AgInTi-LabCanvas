@@ -197,13 +197,10 @@ def stable_message_id(row: dict[str, Any]) -> str:
 def message_actor(config: dict[str, Any], row: dict[str, Any]) -> tuple[str, str, str]:
     sender_id = str(row.get("sender") or "").strip()
     sender_name = str(row.get("sender_display") or sender_id or "群成员").strip()[:120]
-    allowlisted_hashes = {
-        str(item).lower() for item in (config.get("personal_group_cloud") or {}).get("support_member_sha256", [])
-        if re.fullmatch(r"[0-9a-fA-F]{64}", str(item))
-    }
-    sender_hash = hashlib.sha256(sender_id.encode("utf-8")).hexdigest() if sender_id else ""
-    role = "support_member" if sender_hash and sender_hash.lower() in allowlisted_hashes else "customer"
-    return sender_id, sender_name, role
+    # Group membership, not a customer/support roster, determines who may
+    # address the Agent. Keep the sender identity for attribution while
+    # treating every non-Agent participant with the same role.
+    return sender_id, sender_name, "group_member"
 
 
 def binding_code(text: str) -> str:

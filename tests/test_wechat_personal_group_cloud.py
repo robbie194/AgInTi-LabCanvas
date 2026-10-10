@@ -85,7 +85,6 @@ class PersonalGroupCloudTests(unittest.TestCase):
             "chatroom_id": "group-exact-1",
             "personal_group_cloud": {
                 "enabled": enabled,
-                "support_member_sha256": [hashlib.sha256(b"support-wxid").hexdigest()],
                 "trigger_prefixes": ["@OverTree", "＠OverTree"],
             },
         }
@@ -210,7 +209,7 @@ class PersonalGroupCloudTests(unittest.TestCase):
         self.assertNotIn("ABCD2345", request.full_url)
         self.assertTrue(result["switched"])
 
-    def test_submits_sender_attribution_and_never_submits_agent_echo(self):
+    def test_submits_any_member_with_same_role_and_never_submits_agent_echo(self):
         client = FakeClient()
         support = self.row(7, "support-wxid", "@OverTree 补充一个背景")
         echo = self.row(8, "agent-wxid", "OverTree answer")
@@ -222,7 +221,7 @@ class PersonalGroupCloudTests(unittest.TestCase):
         )
         self.assertEqual(len(client.submitted), 1)
         message = client.submitted[0][1]
-        self.assertEqual(message["actorRole"], "support_member")
+        self.assertEqual(message["actorRole"], "group_member")
         self.assertEqual(message["actorId"], "support-wxid")
         self.assertEqual(message["content"], "@OverTree 补充一个背景")
         self.assertEqual(result["metrics"]["pending"], 1)

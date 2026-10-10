@@ -61,8 +61,10 @@ history, and project boundary. The existing direct-chat monitor bypasses its
 local Agent only when that group's private config explicitly enables
 `personal_group_cloud.enabled` and the exact group ID also appears in
 `WECHAT_PERSONAL_GROUP_ALLOWLIST`. Only messages that explicitly @mention the
-configured Agent name enter the Cloud session; ordinary human group chat stays
-in WeChat. Send the one-time code into the already-registered group to bind it;
+configured Agent name enter the Cloud session; every group member can do this,
+and ordinary human group chat stays in WeChat. Cloud records who spoke by their
+WeChat display name without assigning different customer/support permissions.
+In the current pilot, send the one-time code into an already-registered group to bind it;
 sending a fresh code in that same group switches only that group's project and
 session. New bindings disconnect after 24 hours without a Cloud conversation by
 default, with 3-day, 7-day, and never-expire choices in Cloud.

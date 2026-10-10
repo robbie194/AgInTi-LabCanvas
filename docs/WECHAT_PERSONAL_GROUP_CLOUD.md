@@ -12,8 +12,10 @@ One operator-owned personal WeChat account can join several customer groups.
 Each exact group ID has one Cloud binding and maps to one customer's project
 and session. Each group gets its own local monitor state file and Cloud
 binding, so customer A's history, files, mode, permissions, and Agent session
-do not enter customer B's group. Customer and registered support-member rows
-are labelled separately before they enter the same OverTree session.
+do not enter customer B's group. Every human participant has the same role:
+any member can address the Agent, and Cloud keeps the sender's display name for
+conversation attribution without treating customers and support staff as
+different permission classes.
 
 The WeChat account itself is still the operator's account. Every customer sees
 the same account name, avatar, and WeChat ID. This is logical Agent isolation,
@@ -138,13 +140,10 @@ the adapter enforces that it is inside `.private`, records its owning group,
 and refuses to reuse it for another group.
 Set both `trigger_prefixes` to the exact visible name used when group members
 mention the Agent. Only messages containing that mention enter the Cloud
-session, whether written by the customer or a registered support member.
+session, regardless of which group member wrote them.
 Unrelated group conversation stays in WeChat. A one-time binding code is the
 only message accepted before the group is bound and may be sent without a
 mention.
-For staff role attribution, place SHA-256 hashes of registered support-member
-WeChat IDs in `support_member_sha256`; never put raw support IDs in the checked-in
-file.
 
 Start the existing direct monitor for that private group config using its
 normal `--loop --send` command. When the Cloud and local flags are false, the
@@ -170,8 +169,8 @@ behavior.
    new code in this same group switches only this group to the new code's
    selected project/session; messages and files for other groups stay isolated.
    The switch discards pending local replies/results from the old session.
-5. Confirm that a customer message, a
-   support-member message, and a result each remain in that one Cloud session.
+5. Confirm that messages from two different group members and a result each
+   remain in that one Cloud session.
 6. Test a small image and file, duplicate/restarted message handling, a
    temporary Cloud outage, and a send-title mismatch before enabling any real
    customer group.

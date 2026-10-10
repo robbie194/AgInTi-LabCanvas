@@ -75,8 +75,9 @@ so the Agent's own replies cannot become input and a GUI send cannot target an
 unrelated conversation. Each group gets a unique private monitor state file.
 Require explicit configured `@Agent` mention prefixes for Cloud turns; only a
 one-time binding code may enter before binding without a mention. Ordinary
-customer/support small talk stays local to WeChat and must not start an Agent
-run.
+group-member small talk stays local to WeChat and must not start an Agent run.
+Treat all human group members equally for trigger authorization; retain the
+sender display name as provenance, and do not require a customer/support roster.
 Once a group is bound, a fresh one-time code in that same exact group switches
 only that group to the newly selected Cloud user/project/session. Process
 switch codes before polling or sending old-session results, clear that group's
