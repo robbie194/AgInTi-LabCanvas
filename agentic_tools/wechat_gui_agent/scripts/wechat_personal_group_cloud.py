@@ -111,11 +111,12 @@ class PersonalGroupCloudClient:
             raise PersonalGroupCloudError("OverTree Cloud returned an invalid response.", retryable=True)
         return payload
 
-    def claim(self, group_id: str, code: str) -> dict[str, Any]:
+    def claim(self, group_id: str, code: str, claim_message_id: str) -> dict[str, Any]:
         return self.request("POST", "/internal/wechat/personal-groups/v1/bindings/claim", {
             "agentAccountId": self.agent_account_id,
             "groupId": group_id,
             "code": code,
+            "claimMessageId": claim_message_id,
         })
 
     def resolve(self, group_id: str) -> dict[str, Any]:
@@ -523,14 +524,14 @@ def run_once(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str,
     response_sent = None
     task_enqueued = None
 
-    # Poll existing runs first. Never start a second turn on a session that is
-    # still running; preserve later messages in the private cursor-backed queue.
+    # Resolve the exact group binding before processing messages.
     resolved_binding = None
     cached_binding_id = str(state.get("personal_group_cloud_binding_id") or "")
     has_inbound_rows = any(inbound(row) for row in rows)
     has_submitted_work = any(isinstance(item, dict) and item.get("submitted") for item in pending)
+    has_claim_attempts = bool(state.get("personal_group_cloud_claim_attempt_ids"))
     last_checked = float(state.get("personal_group_cloud_binding_checked_at") or 0)
-    should_resolve = has_inbound_rows or (not cached_binding_id and has_submitted_work) or (cached_binding_id and now - last_checked >= 60)
+    should_resolve = has_inbound_rows or (not cached_binding_id and (has_submitted_work or has_claim_attempts)) or (cached_binding_id and now - last_checked >= 60)
     revoked_binding = False
     if should_resolve:
         try:
@@ -550,10 +551,137 @@ def run_once(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str,
                 pending = state["personal_group_cloud_pending"]
                 outbox = state["personal_group_cloud_outbox"]
                 state["personal_group_cloud_revoked_at"] = int(now)
+            state["personal_group_cloud_claim_attempt_ids"] = []
         state["personal_group_cloud_binding_checked_at"] = int(now)
     elif cached_binding_id:
         resolved_binding = {"ok": True, "bindingId": cached_binding_id}
 
+    inbound_rows = [row for row in rows if inbound(row)]
+    trigger_rows = [row for row in inbound_rows if eligible(row)]
+    _reconcile_outgoing_echoes(state, rows, inbound=inbound, visible_text=visible_text, now=now)
+
+    # Old state files stored only raw message IDs. Keep accepting that shape,
+    # and store the source locator (never the binding code itself) after this
+    # point so a lost HTTP response can be acknowledged safely after restart.
+    attempts = state.setdefault("personal_group_cloud_claim_attempt_ids", [])
+    attempt_sources = {
+        str(item.get("messageId") or ""): item.get("sourceRow") or {}
+        for item in attempts if isinstance(item, dict)
+    }
+    attempted_claims = {
+        str(item.get("messageId") or "") if isinstance(item, dict) else str(item)
+        for item in attempts
+    }
+    handled_binding_ids: set[str] = set()
+
+    # Resolve a claim whose HTTP response was lost. Cloud returns the exact
+    # source-message receipt ID, so a pre-existing binding can never be
+    # mistaken for a successful session switch.
+    if resolved_binding and attempted_claims:
+        committed_claim = str(resolved_binding.get("lastClaimMessageId") or "")
+        if committed_claim and committed_claim in attempted_claims:
+            for row in inbound_rows:
+                message_id = stable_message_id(row)
+                if message_id == committed_claim:
+                    attempt_sources[message_id] = row
+                    handled_binding_ids.add(message_id)
+            source = attempt_sources.get(committed_claim, {})
+            state["personal_group_cloud_pending"] = []
+            state["personal_group_cloud_outbox"] = []
+            pending = state["personal_group_cloud_pending"]
+            outbox = state["personal_group_cloud_outbox"]
+            _enqueue_outgoing(state, "此群已连接到新选择的 OverTree 项目和会话。", source, "binding-recovered")
+            state["personal_group_cloud_claim_attempt_ids"] = [
+                item for item in attempts
+                if (str(item.get("messageId") or "") if isinstance(item, dict) else str(item)) != committed_claim
+            ]
+        elif committed_claim:
+            # This code did not produce the active binding. Drop its checkpoint
+            # so a still-visible code can be retried; if it was already read,
+            # the user can resend it without leaking the code into state.
+            visible_ids = {stable_message_id(row) for row in inbound_rows}
+            attempts = [
+                item for item in attempts
+                if (str(item.get("messageId") or "") if isinstance(item, dict) else str(item)) not in visible_ids
+            ]
+            state["personal_group_cloud_claim_attempt_ids"] = attempts
+            attempted_claims = {
+                str(item.get("messageId") or "") if isinstance(item, dict) else str(item)
+                for item in attempts
+            }
+
+    # A fresh code can bind an unbound group or switch this exact bound group
+    # to another account/project/session. It never changes other groups.
+    for row in inbound_rows:
+        code = binding_code(visible_text(row))
+        if not code:
+            continue
+        message_id = stable_message_id(row)
+        if message_id in attempted_claims:
+            # A retry of an uncertain one-time claim must first reconcile via
+            # resolve; never resend or persist its plaintext code.
+            continue
+        attempts.append({
+            "messageId": message_id,
+            "sourceRow": {
+                "_message_db": str(row.get("_message_db") or ""),
+                "server_id": str(row.get("server_id") or ""),
+                "local_id": int(row.get("local_id") or 0),
+            },
+        })
+        state["personal_group_cloud_claim_attempt_ids"] = attempts[-MAX_PENDING:]
+        attempted_claims.add(message_id)
+        _persist_local_state(config, state)
+        claim = client.claim(group_id, code, message_id)
+        handled_binding_ids.add(message_id)
+        attempts = [
+            item for item in attempts
+            if (str(item.get("messageId") or "") if isinstance(item, dict) else str(item)) != message_id
+        ]
+        state["personal_group_cloud_claim_attempt_ids"] = attempts
+        attempted_claims.discard(message_id)
+        if claim.get("ok"):
+            switched = bool(claim.get("switched"))
+            state["personal_group_cloud_binding_id"] = str(claim.get("bindingId") or "")
+            state["personal_group_cloud_binding_checked_at"] = int(now)
+            state["personal_group_cloud_claim_attempt_ids"] = []
+            attempts = []
+            attempted_claims.clear()
+            state.pop("personal_group_cloud_unbound_notified", None)
+            if switched:
+                state["personal_group_cloud_pending"] = []
+                state["personal_group_cloud_outbox"] = []
+                pending = state["personal_group_cloud_pending"]
+                outbox = state["personal_group_cloud_outbox"]
+            text = "此群已切换到新选择的 OverTree 项目和会话。" if switched else "此群已连接到对应的 OverTree 项目和会话。"
+            _enqueue_outgoing(state, text, row, "binding-switched" if switched else "binding")
+            resolved_binding = claim
+        else:
+            _enqueue_outgoing(state, "绑定码无效或已过期，请在 OverTree 中重新生成后再发送。", row, "binding-invalid")
+
+    if not resolved_binding:
+        if not state.get("personal_group_cloud_unbound_notified") and any(
+            personal_group_message_is_addressed(config, row, visible_text) for row in trigger_rows
+        ):
+            source = next(row for row in trigger_rows if personal_group_message_is_addressed(config, row, visible_text))
+            _enqueue_outgoing(
+                state,
+                "这个群当前没有有效的 OverTree 连接码，或连接已因空闲超时断开。请在 OverTree 的微信连接页生成新码并发到本群。",
+                source,
+                "binding-required",
+            )
+            state["personal_group_cloud_unbound_notified"] = True
+        sent_outgoing, send_error = _flush_outbox(config, state, send_text, now)
+        return {
+            "response_sent": sent_outgoing,
+            "task_enqueued": None,
+            "processed_rows": len(rows),
+            "metrics": {"transport": "personal_group_cloud", "binding": "unbound", "outbox": len(state.get("personal_group_cloud_outbox") or []), **({"send_error": send_error} if send_error else {})},
+            "state": state,
+        }
+
+    # Poll only after processing rebinding codes. A switch must never deliver
+    # the previous session's pending results into the newly bound group.
     remaining: list[dict[str, Any]] = []
     for item in pending:
         if not item.get("submitted"):
@@ -565,9 +693,9 @@ def run_once(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str,
         receipt = client.get_message(group_id, str(item["messageId"]))
         status = str(receipt.get("status") or "running").lower()
         if status in {"running", "queued", "processing", "starting"}:
-            attempts = int(item.get("pollAttempts") or 0) + 1
-            item["pollAttempts"] = attempts
-            item["nextPollAt"] = now + min(30, 2 ** min(attempts, 5))
+            attempts_count = int(item.get("pollAttempts") or 0) + 1
+            item["pollAttempts"] = attempts_count
+            item["nextPollAt"] = now + min(30, 2 ** min(attempts_count, 5))
             remaining.append(item)
             continue
         result = str(receipt.get("result") or "").strip()
@@ -584,60 +712,6 @@ def run_once(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str,
         break
     state["personal_group_cloud_pending"] = remaining
     pending = state["personal_group_cloud_pending"]
-
-    inbound_rows = [row for row in rows if inbound(row)]
-    trigger_rows = [row for row in inbound_rows if eligible(row)]
-    _reconcile_outgoing_echoes(state, rows, inbound=inbound, visible_text=visible_text, now=now)
-    attempted_claim_ids = state.setdefault("personal_group_cloud_claim_attempt_ids", [])
-    attempted_claims = {str(item) for item in attempted_claim_ids}
-    handled_binding_ids: set[str] = set()
-
-    # A prior claim can commit in Cloud while its HTTP response is lost. The
-    # checkpointed claim ID lets the next pass recognize the now-bound group
-    # without forwarding the one-time code into the user conversation.
-    if resolved_binding and attempted_claims:
-        for row in inbound_rows:
-            message_id = stable_message_id(row)
-            if message_id not in attempted_claims:
-                continue
-            handled_binding_ids.add(message_id)
-            _enqueue_outgoing(state, "此群已连接到对应的 OverTree 项目和会话。客户与已登记客服的消息会进入同一会话。", row, "binding-recovered")
-        if handled_binding_ids:
-            state["personal_group_cloud_claim_attempt_ids"] = [item for item in attempted_claim_ids if str(item) not in handled_binding_ids]
-
-    # A one-time Cloud binding code may arrive as a bare code or "绑定 CODE".
-    if not resolved_binding:
-        for row in inbound_rows:
-            code = binding_code(visible_text(row))
-            if not code:
-                continue
-            message_id = stable_message_id(row)
-            if message_id not in attempted_claims:
-                attempted_claim_ids.append(message_id)
-                state["personal_group_cloud_claim_attempt_ids"] = attempted_claim_ids[-MAX_PENDING:]
-                attempted_claims.add(message_id)
-                _persist_local_state(config, state)
-            claim = client.claim(group_id, code)
-            handled_binding_ids.add(message_id)
-            state["personal_group_cloud_claim_attempt_ids"] = [item for item in state["personal_group_cloud_claim_attempt_ids"] if str(item) != message_id]
-            attempted_claims.discard(message_id)
-            if claim.get("ok"):
-                state["personal_group_cloud_binding_id"] = str(claim.get("bindingId") or "")
-                state.pop("personal_group_cloud_unbound_notified", None)
-                _enqueue_outgoing(state, "此群已连接到对应的 OverTree 项目和会话。客户与已登记客服的消息会进入同一会话。", row, "binding")
-                resolved_binding = claim
-            else:
-                _enqueue_outgoing(state, "绑定码无效或已过期，请在 OverTree 中重新生成后再发送。", row, "binding-invalid")
-        if not resolved_binding:
-            state["personal_group_cloud_unbound_notified"] = True
-            sent_outgoing, send_error = _flush_outbox(config, state, send_text, now)
-            return {
-                "response_sent": sent_outgoing,
-                "task_enqueued": None,
-                "processed_rows": len(rows),
-                "metrics": {"transport": "personal_group_cloud", "binding": "unbound", "outbox": len(state.get("personal_group_cloud_outbox") or []), **({"send_error": send_error} if send_error else {})},
-                "state": state,
-            }
 
     trigger_rows = [
         row for row in trigger_rows

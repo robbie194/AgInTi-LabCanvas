@@ -30,6 +30,7 @@ class FakeClient:
         self.receipt = receipt or {"status": "running", "responseId": "run-1"}
         self.claim_error = claim_error
         self.claimed = []
+        self.last_claim_message_id = ""
         self.submitted = []
         self.polled = []
         self.uploaded = []
@@ -39,14 +40,16 @@ class FakeClient:
         self.resolve_calls += 1
         if not self.bound:
             raise bridge.PersonalGroupCloudError("missing", status_code=404)
-        return {"ok": True, "bindingId": "binding-1"}
+        return {"ok": True, "bindingId": "binding-1", "lastClaimMessageId": self.last_claim_message_id}
 
-    def claim(self, group_id: str, code: str) -> dict:
-        self.claimed.append((group_id, code))
+    def claim(self, group_id: str, code: str, claim_message_id: str) -> dict:
+        self.claimed.append((group_id, code, claim_message_id))
+        switched = self.bound
         self.bound = True
+        self.last_claim_message_id = claim_message_id
         if self.claim_error:
             raise self.claim_error
-        return {"ok": True, "bindingId": "binding-1"}
+        return {"ok": True, "bindingId": "binding-1", "switched": switched}
 
     def submit(self, group_id: str, message: dict) -> dict:
         self.submitted.append((group_id, message))
@@ -106,7 +109,7 @@ class PersonalGroupCloudTests(unittest.TestCase):
         config = self.config()
         config["_runtime_state_path"] = str(Path(state_dir.name) / "group.state.json")
         return bridge.run_once(
-            config, state or {}, rows, send=True,
+            config, state if state is not None else {}, rows, send=True,
             inbound=lambda row: row.get("sender") != "agent-wxid",
             eligible=lambda row: row.get("sender") != "agent-wxid",
             visible_text=lambda row: row["content"],
@@ -185,6 +188,28 @@ class PersonalGroupCloudTests(unittest.TestCase):
         self.assertEqual(request.get_header("X-overtree-wechat-signature"), expected)
         self.assertEqual(result["path"], "wechat-inbox/binding/file.pdf")
 
+    def test_binding_claim_carries_an_idempotency_receipt_in_the_private_body(self):
+        captured = {}
+
+        def opener(request, timeout):
+            captured["request"] = request
+            return FakeResponse({"ok": True, "bindingId": "binding-1", "switched": True})
+
+        client = bridge.PersonalGroupCloudClient(
+            base_url="https://cloud.example",
+            secret="s" * 48,
+            agent_account_id="agent-1",
+            opener=opener,
+        )
+        result = client.claim("group-exact-1", "ABCD2345", "message_4.db:server-5:5")
+        request = captured["request"]
+        self.assertEqual(urlsplit(request.full_url).path, "/internal/wechat/personal-groups/v1/bindings/claim")
+        body = json.loads(request.data)
+        self.assertEqual(body["code"], "ABCD2345")
+        self.assertEqual(body["claimMessageId"], "message_4.db:server-5:5")
+        self.assertNotIn("ABCD2345", request.full_url)
+        self.assertTrue(result["switched"])
+
     def test_submits_sender_attribution_and_never_submits_agent_echo(self):
         client = FakeClient()
         support = self.row(7, "support-wxid", "@OverTree 补充一个背景")
@@ -209,10 +234,10 @@ class PersonalGroupCloudTests(unittest.TestCase):
         followup = self.row(10, "customer-wxid", "@OverTree 我想分析这个项目")
         sent = []
         result = self.run_once(client, [code, followup], send_text=lambda _config, text: sent.append(text))
-        self.assertEqual(client.claimed, [("group-exact-1", "ABC23456")])
+        self.assertEqual(client.claimed, [("group-exact-1", "ABC23456", "message_4.db:server-9:9")])
         self.assertEqual(len(client.submitted), 1)
         self.assertEqual(client.submitted[0][1]["content"], "@OverTree 我想分析这个项目")
-        self.assertEqual(sent, ["此群已连接到对应的 OverTree 项目和会话。客户与已登记客服的消息会进入同一会话。"])
+        self.assertEqual(sent, ["此群已连接到对应的 OverTree 项目和会话。"])
         self.assertEqual(result["metrics"]["transport"], "personal_group_cloud")
 
     def test_exact_media_file_is_uploaded_before_cloud_message_submission(self):
@@ -240,6 +265,35 @@ class PersonalGroupCloudTests(unittest.TestCase):
         self.run_once(client, [addressed])
         self.assertEqual(len(client.submitted), 1)
         self.assertIn("＠OverTree", client.submitted[0][1]["content"])
+
+    def test_new_code_switches_only_this_groups_cloud_session_and_discards_old_delivery_queue(self):
+        client = FakeClient(bound=True)
+        code = self.row(17, "customer-wxid", "XYZ23456")
+        state = {
+            "personal_group_cloud_binding_id": "binding-1",
+            "personal_group_cloud_binding_checked_at": int(time.time()),
+            "personal_group_cloud_pending": [{"messageId": "old-session-result", "submitted": True}],
+            "personal_group_cloud_outbox": [{"id": "old-project-file", "text": "private old project link"}],
+        }
+        sent = []
+        result = self.run_once(client, [code], state=state, send_text=lambda _config, text: sent.append(text))
+        self.assertEqual(client.claimed, [("group-exact-1", "XYZ23456", "message_4.db:server-17:17")])
+        self.assertEqual(client.polled, [])
+        self.assertEqual(client.submitted, [])
+        self.assertNotIn("private old project link", sent)
+        self.assertEqual(sent, ["此群已切换到新选择的 OverTree 项目和会话。"])
+        self.assertEqual(result["state"]["personal_group_cloud_pending"], [])
+
+    def test_unbound_mentioned_message_explains_that_the_group_needs_a_fresh_code(self):
+        client = FakeClient(bound=False)
+        state = {}
+        sent = []
+        first = self.row(18, "customer-wxid", "@OverTree 帮我继续")
+        second = self.row(19, "customer-wxid", "@OverTree 再试一次")
+        self.run_once(client, [first], state=state, send_text=lambda _config, text: sent.append(text))
+        self.run_once(client, [second], state=state, send_text=lambda _config, text: sent.append(text))
+        self.assertEqual(len(sent), 1)
+        self.assertIn("因空闲超时断开", sent[0])
 
     def test_terminal_result_is_delivered_and_pending_item_is_cleared(self):
         client = FakeClient(receipt={"status": "finished", "result": "已完成", "files": [{"url": "https://cloud.example/result.pdf"}]})
@@ -308,7 +362,7 @@ class PersonalGroupCloudTests(unittest.TestCase):
                     client_factory=lambda _config: (client, "group-exact-1"),
                 )
             saved_state = json.loads(state_path.read_text(encoding="utf-8"))
-            self.assertIn("message_4.db:server-13:13", saved_state["personal_group_cloud_claim_attempt_ids"])
+            self.assertEqual(saved_state["personal_group_cloud_claim_attempt_ids"][0]["messageId"], "message_4.db:server-13:13")
             sent = []
             recovered = bridge.run_once(
                 config, saved_state, [row], send=True,

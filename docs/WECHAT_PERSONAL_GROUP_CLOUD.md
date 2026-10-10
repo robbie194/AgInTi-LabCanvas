@@ -102,6 +102,11 @@ that bypasses the reverse-proxy block. Add only the exact tested `chatroom_id`
 to `WECHAT_PERSONAL_GROUP_ALLOWLIST`; use comma-separated IDs only when each
 one has its own monitor configuration and state file.
 
+In the current pilot, a LabCanvas operator must first add the exact group to
+its allowlist and start the guarded monitor. The Cloud UI tells the customer
+to confirm that setup before posting a code; the group ID remains an internal
+transport detail, so customers do not need to look it up or enter it.
+
 The ignored per-group direct-chat config needs these fields in addition to its
 normal local WeChat database and GUI settings:
 
@@ -151,20 +156,32 @@ behavior.
 
 ## Binding a group
 
-1. In OverTree Cloud's `/wechat` page, choose the customer's project, the
+1. Create an ordinary WeChat group for the customer. Add the customer, your
+   operator account, and the support people who should be visible.
+2. Configure the exact group in LabCanvas: allowlist its group ID, set the
+   exact account and GUI title, give it a unique private state file, and start
+   the guarded monitor. Tell the customer when the group is ready for binding.
+3. In OverTree Cloud's `/wechat` page, choose the customer's project, the
    intended existing session (or create a dedicated one), select **微信辅导群**,
-   and create a one-time link code. Customer Service remains the separate
-   self-service entrance; it does not provision a unique WeChat account for
-   every Cloud session.
-2. Create a new ordinary WeChat group for that customer. Add the customer,
-   your operator account, and the support people who should be visible.
-3. Start the exact-group LabCanvas monitor and enable that exact group ID in
-   its allowlist. Send the one-time code in the group.
-4. Confirm that the Cloud binding appears and that a customer message, a
+   choose its idle-disconnect period, and create a one-time link code. The
+   customer sends that code directly into the registered group without an @.
+   Customer Service remains a separate self-service entrance.
+4. Confirm that Cloud shows the selected project and session. Later, sending a
+   new code in this same group switches only this group to the new code's
+   selected project/session; messages and files for other groups stay isolated.
+   The switch discards pending local replies/results from the old session.
+5. Confirm that a customer message, a
    support-member message, and a result each remain in that one Cloud session.
-5. Test a small image and file, duplicate/restarted message handling, a
+6. Test a small image and file, duplicate/restarted message handling, a
    temporary Cloud outage, and a send-title mismatch before enabling any real
    customer group.
+
+New personal-group bindings default to automatic disconnect after 24 hours
+without a Cloud conversation. The Cloud UI also offers 3 days, 7 days, or no
+automatic disconnect. A running Cloud task keeps the binding alive. After idle
+expiry, the first message that @mentions the Agent receives a reconnect
+instruction and is not sent to the old session; the customer generates a new
+one-time code and posts it in the same group to select a project/session again.
 
 Disable both feature flags immediately if the wrong group opens, self-replies
 loop, a different group's file appears, the WeChat client requests security

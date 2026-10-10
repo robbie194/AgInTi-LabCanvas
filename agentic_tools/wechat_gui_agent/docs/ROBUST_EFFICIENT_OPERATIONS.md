@@ -77,6 +77,17 @@ Require explicit configured `@Agent` mention prefixes for Cloud turns; only a
 one-time binding code may enter before binding without a mention. Ordinary
 customer/support small talk stays local to WeChat and must not start an Agent
 run.
+Once a group is bound, a fresh one-time code in that same exact group switches
+only that group to the newly selected Cloud user/project/session. Process
+switch codes before polling or sending old-session results, clear that group's
+pending/outbox items on a confirmed switch, and reconcile a lost claim response
+with Cloud's exact claim-message receipt; never infer a successful switch from
+an already-existing binding. New links default to 24 hours without a Cloud
+conversation before automatic disconnect; Cloud also offers 3 days, 7 days, or
+no timeout. Do not expire a binding while that group's Cloud run is still
+starting or running. After expiry, an @Agent mention should receive one concise
+notice asking the user to generate a new code; it must not enter the old
+session.
 The enabled branch must route only to the isolated Cloud personal-group HMAC
 namespace and must not fall through to the local Agent, WeCom, or Customer
 Service route. Keep Cloud `/internal/*` private behind VPN/SSH access. Media
