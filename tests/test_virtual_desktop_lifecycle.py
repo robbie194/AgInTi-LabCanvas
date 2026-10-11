@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
+import json
 import re
+import shlex
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -83,6 +86,75 @@ class VirtualDesktopLifecycleTests(unittest.TestCase):
             source,
         )
         self.assertIn("WeChat entry/login window healthy", source)
+
+    def test_wechat_launch_uses_isolated_environment_before_starting_client(self) -> None:
+        source = WECHAT.read_text(encoding="utf-8")
+        match = re.search(r"(?ms)^launch_wechat\(\) \{.*?^\}", source)
+        self.assertIsNotNone(match)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            fake_setsid = temp / "setsid"
+            fake_setsid.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, sys\n"
+                "print(json.dumps({\n"
+                "    'home': os.environ.get('HOME'),\n"
+                "    'xdg_config': os.environ.get('XDG_CONFIG_HOME'),\n"
+                "    'xdg_data': os.environ.get('XDG_DATA_HOME'),\n"
+                "    'xdg_cache': os.environ.get('XDG_CACHE_HOME'),\n"
+                "    'display': os.environ.get('DISPLAY'),\n"
+                "    'wayland_display': os.environ.get('WAYLAND_DISPLAY'),\n"
+                "    'qt_plugin_path': os.environ.get('QT_PLUGIN_PATH'),\n"
+                "    'qt_platform_plugin_path': os.environ.get('QT_QPA_PLATFORM_PLUGIN_PATH'),\n"
+                "    'qt_fontdir': os.environ.get('QT_QPA_FONTDIR'),\n"
+                "    'qt_style_override': os.environ.get('QT_STYLE_OVERRIDE'),\n"
+                "    'qt_platform': os.environ.get('QT_QPA_PLATFORM'),\n"
+                "    'argv': sys.argv[1:],\n"
+                "}))\n",
+                encoding="utf-8",
+            )
+            fake_setsid.chmod(0o755)
+            app_log = temp / "wechat_app.log"
+            shell = "\n".join(
+                [
+                    match.group(0),
+                    f"WECHAT_HOME={shlex.quote(str(temp / 'profile'))}",
+                    f"WECHAT_AGENT_XDG_CONFIG_HOME={shlex.quote(str(temp / 'config'))}",
+                    f"WECHAT_AGENT_XDG_DATA_HOME={shlex.quote(str(temp / 'data'))}",
+                    f"WECHAT_AGENT_XDG_CACHE_HOME={shlex.quote(str(temp / 'cache'))}",
+                    "DISPLAY_ID=:97",
+                    f"APP_LOG={shlex.quote(str(app_log))}",
+                    f"PATH={shlex.quote(str(temp))}:$PATH",
+                    "export WAYLAND_DISPLAY=host-wayland",
+                    "export QT_PLUGIN_PATH=host-qt-plugin",
+                    "export QT_QPA_PLATFORM_PLUGIN_PATH=host-qt-platform",
+                    "export QT_QPA_FONTDIR=host-qt-fonts",
+                    "export QT_STYLE_OVERRIDE=host-qt-style",
+                    "launch_wechat",
+                ]
+            )
+            result = subprocess.run(
+                ["bash", "-c", shell], capture_output=True, text=True, check=False
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(app_log.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["home"], str(temp / "profile"))
+        self.assertEqual(payload["xdg_config"], str(temp / "config"))
+        self.assertEqual(payload["xdg_data"], str(temp / "data"))
+        self.assertEqual(payload["xdg_cache"], str(temp / "cache"))
+        self.assertEqual(payload["display"], ":97")
+        self.assertEqual(payload["qt_platform"], "xcb")
+        for variable in (
+            "wayland_display",
+            "qt_plugin_path",
+            "qt_platform_plugin_path",
+            "qt_fontdir",
+            "qt_style_override",
+        ):
+            self.assertIsNone(payload[variable], variable)
+        self.assertEqual(payload["argv"], ["-f", "/usr/bin/wechat"])
 
 
 if __name__ == "__main__":
