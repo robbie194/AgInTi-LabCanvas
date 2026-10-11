@@ -102,32 +102,13 @@ sudo -u overtree-wechat env \
 
 先用 `dpkg-deb -f /tmp/WeChatLinux_x86_64.deb Version Architecture` 确认包版本和 `amd64` 架构，再解压。下载包应来自腾讯 Linux 微信官网/官方 CDN。`restart-client` 只关闭并重启 `DISPLAY=:97` 上的 Agent 客户端；生活微信仍使用共享安装，不会被切换。
 
-登录成功后，在 Agent profile 下安装私有解密后端并初始化配置：
+## 当前阻断：个人群消息读取尚不可用
 
-```bash
-sudo -u overtree-wechat env HOME=/home/overtree-wechat \
-  WECHAT_AGENT_HOME=/home/overtree-wechat/.local/share/overtree-wechat \
-  WECHAT_AGENT_PRIVATE_DIR=/home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private \
-  python3 /opt/overtree-labcanvas/agentic_tools/wechat_gui_agent/scripts/wechat_direct_backend.py install
-sudo -u overtree-wechat env HOME=/home/overtree-wechat \
-  WECHAT_AGENT_HOME=/home/overtree-wechat/.local/share/overtree-wechat \
-  WECHAT_AGENT_PRIVATE_DIR=/home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private \
-  python3 /opt/overtree-labcanvas/agentic_tools/wechat_gui_agent/scripts/wechat_direct_backend.py find-keys
-```
+Agent 微信已在新版官方 Linux 客户端中登录，但个人群消息读取当前依赖的上游 `ylytdeng/wechat-decrypt` 已被 GitHub 按 DMCA 通知下架。GitHub 返回 HTTP 403；通知称该工具通过扫描微信进程内存提取数据库密钥，以绕过数据库保护措施，并援引了微信服务条款。详见 <https://github.com/github/dmca/blob/master/2026/07/2026-07-13-wechat-3.md>。
 
-随后运行 `decrypt --incremental`，从解密后的联系人库确认群名对应的 `group_id`、消息表和 Agent `self_wxid`。每个实际群只登记一次，生成独立 state/config：
+不要按旧步骤安装这个仓库、运行 `find-keys` 或 `decrypt`，也不要使用镜像或 fork。当前没有解密聊天数据库、扫描进程内存或启动个人群监控。Cloud 与本机 `WECHAT_PERSONAL_GROUP_ENABLED` 开关保持关闭；不要创建客户测试群或发送绑定码，直到确定了不依赖密钥提取/数据库解密的受支持消息来源。
 
-```bash
-sudo -u overtree-wechat env HOME=/home/overtree-wechat \
-  WECHAT_AGENT_HOME=/home/overtree-wechat/.local/share/overtree-wechat \
-  WECHAT_AGENT_PRIVATE_DIR=/home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private \
-  WECHAT_AGENT_ENV_FILE=/home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private/wechat_supervisor.local.env \
-  /opt/overtree-labcanvas/agentic_tools/wechat_gui_agent/scripts/wechat_agent_profile.sh add-group \
-  --group-name "客户辅导群" --group-id "<GROUP_ID>" \
-  --self-wxid "<AGENT_WXID>" --message-table "<MSG_TABLE>"
-```
-
-首次验收前保持 `--enable` 不使用；确认群名、标题守卫、绑定码和文件发送都正确后，再在本机 profile 开关和 Cloud 运行环境中按部署窗口同时启用。
+下文的隧道和配置说明是已实现接口的设计参考，不代表个人群入口已能收发消息。企业微信客服一对一和 OverTree 网页入口保持原样。
 
 ## Cloud 连接方式
 

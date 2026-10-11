@@ -6,6 +6,16 @@ transport only: Cloud owns the user, project, session, agent run, file intake,
 and result. The existing WeChat Customer Service and WeCom transports keep
 their separate routes and credentials.
 
+> **Current status (2026-10-11): paused before group testing.** The Agent
+> desktop login works, but this transport's message reader depends on
+> `ylytdeng/wechat-decrypt`, which GitHub disabled after a DMCA notice alleging
+> memory-based extraction of WeChat database keys. GitHub returns HTTP 403.
+> Do not install a mirror/fork, scan process memory, decrypt databases, create a
+> customer test group, or enable either group flag based on this guide. The
+> Cloud adapter remains disabled; use the existing WeChat Customer Service
+> one-to-one route while a supported message source is evaluated. Details:
+> <https://github.com/github/dmca/blob/master/2026/07/2026-07-13-wechat-3.md>.
+
 ## Identity and isolation
 
 One operator-owned personal WeChat account can join several customer groups.
@@ -19,9 +29,11 @@ different permission classes.
 
 The WeChat account itself is still the operator's account. Every customer sees
 the same account name, avatar, and WeChat ID. This is logical Agent isolation,
-not a different WeChat identity for each customer. LabCanvas uses the visible
-official desktop client; this is personal-account automation, not an official
-Tencent Bot API, and it cannot be described as zero-risk.
+not a different WeChat identity for each customer. LabCanvas was designed to
+use the visible official desktop client plus local message-database access;
+this is personal-account automation, not an official Tencent Bot API, and it
+cannot be described as zero-risk. Its planned database reader is currently
+blocked by the DMCA removal above.
 
 The two entrances have different identities:
 
@@ -104,10 +116,9 @@ that bypasses the reverse-proxy block. Add only the exact tested `chatroom_id`
 to `WECHAT_PERSONAL_GROUP_ALLOWLIST`; use comma-separated IDs only when each
 one has its own monitor configuration and state file.
 
-In the current pilot, a LabCanvas operator must first add the exact group to
-its allowlist and start the guarded monitor. The Cloud UI tells the customer
-to confirm that setup before posting a code; the group ID remains an internal
-transport detail, so customers do not need to look it up or enter it.
+In the planned pilot, a LabCanvas operator must first add the exact group to
+its allowlist and start the guarded monitor. This setup is paused until a
+supported message source is available; do not post a binding code to a group.
 
 The ignored per-group direct-chat config needs these fields in addition to its
 normal local WeChat database and GUI settings:
@@ -153,7 +164,11 @@ messages to the bound Cloud session and does not run the LabCanvas local Agent
 for those messages. Every other configured chat keeps its existing local
 behavior.
 
-## Binding a group
+## Binding a group (future workflow; currently blocked)
+
+Do not follow these steps while the message-reader blocker above remains. They
+describe the intended workflow after a supported ingress has been selected and
+validated.
 
 1. Create an ordinary WeChat group for the customer. Add the customer, your
    operator account, and the support people who should be visible.
@@ -192,7 +207,10 @@ The LabCanvas direct monitor has an isolated Cloud dispatch branch, exact
 allowlist checks, HMAC-signed JSON and binary-upload calls, per-sender role
 labels, result polling, a durable retry outbox, and source-token-scoped media
 intake. Automated tests cover sender routing, attachment upload requests,
-binding-code recovery, result delivery, and refusal to route other groups.
+binding-code recovery, result delivery, and refusal to route other groups. The
+planned inbound source is currently unavailable because its database-decryptor
+repository was DMCA-taken down; those tests do not prove a live personal-WeChat
+group can be read or safely automated.
 
 This is not yet enabled or deployed for a real user group. The Cloud flag stays
 false until a separate test device, a real private route, and the acceptance
