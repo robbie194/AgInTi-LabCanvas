@@ -41,6 +41,7 @@ sudo -u overtree-wechat env \
 
 其中的 `WECHAT_DIRECT_CONFIGS` 需要填写每个已登记群的私有 JSON；个人群 Cloud 开关和独立 HMAC secret 也只放在这个文件或系统 secret store，不进 Git。
 文件回传还需要设置 `WECHAT_PERSONAL_GROUP_ARTIFACT_BASE_URL=https://cloud.overtree.top`。此值必须和 Cloud 返回的文件 URL 域名一致；下载器只接受这个 HTTPS 来源，并拒绝跨域重定向。
+代码副本 `/opt/overtree-labcanvas` 由 root 持有并只读；Agent 的镜像数据库、解密缓存、图片密钥、下载附件、队列、状态和日志全部使用 `WECHAT_AGENT_PRIVATE_DIR`，默认位于 Agent HOME 下的 `labcanvas-private`。因此媒体同步不会写入代码副本，也不会接触生活微信用户的目录。
 
 服务器和本机已经预置了同一组随机 HMAC secret，但本机 Agent 用户尚未创建时不要复制普通用户的 profile。创建 `overtree-wechat` 并初始化 profile 后，用管理员权限把 secret 写入 Agent profile（命令不会打印 secret）：
 
