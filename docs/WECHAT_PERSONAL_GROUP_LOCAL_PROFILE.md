@@ -22,13 +22,15 @@ cd /home/robbie/tyf_code/polan/AgInTiFlow/AgInTi-LabCanvas
 sudo agentic_tools/wechat_gui_agent/scripts/wechat_agent_user_install.sh
 ```
 
+脚本会把排除私有运行数据的只读代码副本放到 `/opt/overtree-labcanvas`。之后所有 Agent 用户命令都使用这个路径，避免 `overtree-wechat` 穿过当前用户的 HOME。
+
 然后以 Agent 用户初始化私有目录：
 
 ```bash
 sudo -u overtree-wechat env \
   HOME=/home/overtree-wechat \
   WECHAT_AGENT_HOME=/home/overtree-wechat/.local/share/overtree-wechat \
-  agentic_tools/wechat_gui_agent/scripts/wechat_agent_profile.sh init
+  /opt/overtree-labcanvas/agentic_tools/wechat_gui_agent/scripts/wechat_agent_profile.sh init
 ```
 
 配置文件位于：
@@ -58,7 +60,7 @@ sudo sh -c '
 sudo -u overtree-wechat env \
   HOME=/home/overtree-wechat \
   WECHAT_AGENT_HOME=/home/overtree-wechat/.local/share/overtree-wechat \
-  agentic_tools/wechat_gui_agent/scripts/wechat_agent_profile.sh desktop
+  /opt/overtree-labcanvas/agentic_tools/wechat_gui_agent/scripts/wechat_agent_profile.sh desktop
 ```
 
 在本机浏览器打开：
@@ -72,7 +74,7 @@ http://127.0.0.1:6107/vnc.html?host=127.0.0.1&port=6107&autoconnect=1&resize=sca
 ```bash
 sudo -u overtree-wechat env HOME=/home/overtree-wechat \
   WECHAT_AGENT_HOME=/home/overtree-wechat/.local/share/overtree-wechat \
-  agentic_tools/wechat_gui_agent/scripts/wechat_agent_profile.sh check
+  /opt/overtree-labcanvas/agentic_tools/wechat_gui_agent/scripts/wechat_agent_profile.sh check
 ```
 
 登录成功后，在 Agent profile 下安装私有解密后端并初始化配置：
@@ -81,11 +83,11 @@ sudo -u overtree-wechat env HOME=/home/overtree-wechat \
 sudo -u overtree-wechat env HOME=/home/overtree-wechat \
   WECHAT_AGENT_HOME=/home/overtree-wechat/.local/share/overtree-wechat \
   WECHAT_AGENT_PRIVATE_DIR=/home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private \
-  python3 agentic_tools/wechat_gui_agent/scripts/wechat_direct_backend.py install
+  python3 /opt/overtree-labcanvas/agentic_tools/wechat_gui_agent/scripts/wechat_direct_backend.py install
 sudo -u overtree-wechat env HOME=/home/overtree-wechat \
   WECHAT_AGENT_HOME=/home/overtree-wechat/.local/share/overtree-wechat \
   WECHAT_AGENT_PRIVATE_DIR=/home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private \
-  python3 agentic_tools/wechat_gui_agent/scripts/wechat_direct_backend.py find-keys
+  python3 /opt/overtree-labcanvas/agentic_tools/wechat_gui_agent/scripts/wechat_direct_backend.py find-keys
 ```
 
 随后运行 `decrypt --incremental`，从解密后的联系人库确认群名对应的 `group_id`、消息表和 Agent `self_wxid`。每个实际群只登记一次，生成独立 state/config：
@@ -95,7 +97,7 @@ sudo -u overtree-wechat env HOME=/home/overtree-wechat \
   WECHAT_AGENT_HOME=/home/overtree-wechat/.local/share/overtree-wechat \
   WECHAT_AGENT_PRIVATE_DIR=/home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private \
   WECHAT_AGENT_ENV_FILE=/home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private/wechat_supervisor.local.env \
-  agentic_tools/wechat_gui_agent/scripts/wechat_agent_profile.sh add-group \
+  /opt/overtree-labcanvas/agentic_tools/wechat_gui_agent/scripts/wechat_agent_profile.sh add-group \
   --group-name "客户辅导群" --group-id "<GROUP_ID>" \
   --self-wxid "<AGENT_WXID>" --message-table "<MSG_TABLE>"
 ```

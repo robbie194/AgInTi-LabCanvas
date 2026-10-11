@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PROFILE = ROOT / "agentic_tools" / "wechat_gui_agent" / "scripts" / "wechat_agent_profile.sh"
 TUNNEL = ROOT / "agentic_tools" / "wechat_gui_agent" / "scripts" / "wechat_cloud_tunnel.sh"
 GROUP_CONFIG = ROOT / "agentic_tools" / "wechat_gui_agent" / "scripts" / "wechat_agent_group_config.py"
+INSTALL = ROOT / "agentic_tools" / "wechat_gui_agent" / "scripts" / "wechat_agent_user_install.sh"
 
 
 class WeChatAgentProfileTests(unittest.TestCase):
@@ -72,6 +73,12 @@ class WeChatAgentProfileTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Configure", result.stderr)
             self.assertNotIn("short", result.stderr)
+
+    def test_user_install_uses_a_separate_root_owned_code_root(self) -> None:
+        content = INSTALL.read_text(encoding="utf-8")
+        self.assertIn("/opt/overtree-labcanvas", content)
+        self.assertIn("agentic_tools/wechat_gui_agent/.private/", content)
+        self.assertIn("rsync -a --delete", content)
 
 
 if __name__ == "__main__":
