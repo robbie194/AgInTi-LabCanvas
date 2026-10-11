@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import BytesIO
 import json
+import os
 from pathlib import Path
 import sqlite3
 import struct
@@ -51,6 +52,40 @@ def make_v2_container(payload: bytes, *, key: bytes, xor_key: int) -> bytes:
 
 
 class WeChatMediaSyncTests(unittest.TestCase):
+    def test_default_media_paths_use_isolated_agent_private_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / "source-cache"
+            source.mkdir()
+            image = source / "agent-photo.png"
+            image.write_bytes(b"\x89PNG\r\n\x1a\nagent-photo")
+            private = base / "agent-private"
+            environment = {**os.environ, "WECHAT_AGENT_PRIVATE_DIR": str(private)}
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--chat",
+                    "Agent group",
+                    "--source",
+                    str(source),
+                    "--since-minutes",
+                    "999",
+                    "--summary-only",
+                ],
+                cwd=ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["status"], "copied")
+            self.assertTrue((private / "downloads").is_dir())
+            self.assertTrue(list((private / "downloads").rglob("agent-photo.png")))
+
     def test_decode_keys_read_stable_private_media_config(self) -> None:
         sys.path.insert(0, str(SCRIPT.parent))
         import wechat_media_sync
@@ -63,13 +98,13 @@ class WeChatMediaSyncTests(unittest.TestCase):
                 json.dumps({"image_aes_key": "1234567890abcdef", "image_xor_key": "0x44"}),
                 encoding="utf-8",
             )
-            original_root = wechat_media_sync.ROOT
+            original_private = wechat_media_sync.PRIVATE
             try:
-                wechat_media_sync.ROOT = base
+                wechat_media_sync.PRIVATE = base / "agentic_tools" / "wechat_gui_agent" / ".private"
                 with mock.patch.dict("os.environ", {"WECHAT_IMAGE_AES_KEY": "", "WECHAT_IMAGE_XOR_KEY": ""}, clear=False):
                     key, xor_key = wechat_media_sync.image_decode_keys("", "")
             finally:
-                wechat_media_sync.ROOT = original_root
+                wechat_media_sync.PRIVATE = original_private
 
         self.assertEqual(key, b"1234567890abcdef")
         self.assertEqual(xor_key, 0x44)

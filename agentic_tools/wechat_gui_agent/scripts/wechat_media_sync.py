@@ -17,7 +17,11 @@ from wechat_mirror import DEFAULT_DB, record_event, record_media_files
 
 
 ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_DEST = ROOT / "agentic_tools" / "wechat_gui_agent" / ".private" / "downloads"
+PRIVATE = Path(os.environ.get(
+    "WECHAT_AGENT_PRIVATE_DIR",
+    str(ROOT / "agentic_tools" / "wechat_gui_agent" / ".private"),
+)).expanduser().resolve()
+DEFAULT_DEST = PRIVATE / "downloads"
 
 
 def main() -> int:
@@ -243,8 +247,8 @@ def image_decode_keys(aes_arg: str, xor_arg: str) -> tuple[bytes | None, int]:
     aes_key = aes_arg or os.environ.get("WECHAT_IMAGE_AES_KEY", "")
     xor_value = xor_arg or os.environ.get("WECHAT_IMAGE_XOR_KEY", "")
     private_configs = [
-        ROOT / "agentic_tools" / "wechat_gui_agent" / ".private" / "wechat_image_keys.local.json",
-        ROOT / "agentic_tools" / "wechat_gui_agent" / ".private" / "external" / "wechat-decrypt" / "config.json",
+        PRIVATE / "wechat_image_keys.local.json",
+        PRIVATE / "external" / "wechat-decrypt" / "config.json",
     ]
     for private_config in private_configs:
         if not private_config.exists():
@@ -267,7 +271,7 @@ def image_decode_keys(aes_arg: str, xor_arg: str) -> tuple[bytes | None, int]:
 
 
 def latest_image_xor_key_from_logs() -> str:
-    log_dir = ROOT / "agentic_tools" / "wechat_gui_agent" / ".private" / "logs"
+    log_dir = PRIVATE / "logs"
     if not log_dir.is_dir():
         return ""
     logs = sorted(log_dir.glob("find_image_key*.log"), key=lambda path: path.stat().st_mtime if path.exists() else 0, reverse=True)
