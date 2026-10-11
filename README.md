@@ -73,8 +73,11 @@ Keep both `CLOUD_WECHAT_PERSONAL_GROUP_ENABLED` in Cloud and
 `WECHAT_PERSONAL_GROUP_ENABLED` in LabCanvas disabled until the isolated
 acceptance checks pass. The adapter calls Cloud's separate HMAC-signed
 `/internal/wechat/personal-groups/v1/*` routes over a private VPN or SSH tunnel;
-never expose `/internal/*` on the public reverse proxy. See the [setup,
-configuration, and acceptance guide](docs/WECHAT_PERSONAL_GROUP_CLOUD.md).
+never expose `/internal/*` on the public reverse proxy. LabCanvas polls Cloud
+and sends replies through the local Agent-WeChat GUI, so the first version does
+not need LazyEdge. For running the Agent account on this same Ubuntu workstation
+beside a normal WeChat account, use the [local Agent-WeChat profile and
+acceptance guide](docs/WECHAT_PERSONAL_GROUP_LOCAL_PROFILE.md).
 
 ## Quick Start
 

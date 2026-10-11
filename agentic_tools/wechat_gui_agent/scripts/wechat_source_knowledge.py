@@ -8,6 +8,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -16,7 +17,10 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[3]
-PRIVATE = ROOT / "agentic_tools" / "wechat_gui_agent" / ".private"
+PRIVATE = Path(os.environ.get(
+    "WECHAT_AGENT_PRIVATE_DIR",
+    str(ROOT / "agentic_tools" / "wechat_gui_agent" / ".private"),
+)).expanduser().resolve()
 DEFAULT_DB = PRIVATE / "source_knowledge.sqlite"
 MAX_TEXT_BYTES = 8 * 1024 * 1024
 

@@ -4,20 +4,32 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 source "$ROOT/scripts/labcanvas_storage_gate.sh"
 labcanvas_storage_ready || exit 75
-PRIVATE_ENV="$ROOT/agentic_tools/wechat_gui_agent/.private/wechat_supervisor.local.env"
+PRIVATE_DIR="${WECHAT_AGENT_PRIVATE_DIR:-$ROOT/agentic_tools/wechat_gui_agent/.private}"
+PRIVATE_ENV="${WECHAT_AGENT_ENV_FILE:-$PRIVATE_DIR/wechat_supervisor.local.env}"
 if [[ -f "$PRIVATE_ENV" ]]; then
   set -a
   # shellcheck disable=SC1090
   source "$PRIVATE_ENV"
   set +a
 fi
+# The profile launcher supplies a separate HOME/XDG root. Keep these exports
+# explicit for every tmux child, including the GUI sender and decrypt loop.
+export HOME="${WECHAT_AGENT_HOME:-$HOME}"
+export XDG_CONFIG_HOME="${WECHAT_AGENT_XDG_CONFIG_HOME:-$HOME/.config}"
+export XDG_DATA_HOME="${WECHAT_AGENT_XDG_DATA_HOME:-$HOME/.local/share}"
+export XDG_CACHE_HOME="${WECHAT_AGENT_XDG_CACHE_HOME:-$HOME/.cache}"
+if [[ "${WECHAT_AGENT_PROFILE_REQUIRED:-0}" == "1" \
+  && "$(id -un)" != "${WECHAT_AGENT_OS_USER:-overtree-wechat}" ]]; then
+  echo "Agent-WeChat profile requires Linux user ${WECHAT_AGENT_OS_USER:-overtree-wechat}." >&2
+  exit 2
+fi
 SESSION="${WECHAT_SUPERVISOR_SESSION:-labcanvas-wechat}"
-CONFIG="${WECHAT_DIRECT_CONFIG:-$ROOT/agentic_tools/wechat_gui_agent/.private/lazy-research-direct-chatops.local.json}"
+CONFIG="${WECHAT_DIRECT_CONFIG:-$PRIVATE_DIR/lazy-research-direct-chatops.local.json}"
 CONFIGS="${WECHAT_DIRECT_CONFIGS:-$CONFIG}"
-DAILY_BRIEFS_CONFIG="${WECHAT_DAILY_BRIEFS_CONFIG:-$ROOT/agentic_tools/wechat_gui_agent/.private/daily-briefs.local.json}"
-QUEUE="${WECHAT_WORKER_QUEUE:-$ROOT/agentic_tools/wechat_gui_agent/.private/wechat_task_queue.jsonl}"
-LOG_DIR="$ROOT/output/wechat_gui_agent/$(date +%F)"
-PY="$ROOT/agentic_tools/wechat_gui_agent/.private/wechat_decrypt/.venv/bin/python"
+DAILY_BRIEFS_CONFIG="${WECHAT_DAILY_BRIEFS_CONFIG:-$PRIVATE_DIR/daily-briefs.local.json}"
+QUEUE="${WECHAT_WORKER_QUEUE:-$PRIVATE_DIR/wechat_task_queue.jsonl}"
+LOG_DIR="${WECHAT_AGENT_LOG_DIR:-$ROOT/output/wechat_gui_agent/$(date +%F)}"
+PY="${WECHAT_AGENT_PYTHON:-$PRIVATE_DIR/wechat_decrypt/.venv/bin/python}"
 DIRECT_POLL_SECONDS="${WECHAT_DIRECT_POLL_SECONDS:-0.8}"
 DIRECT_CATCHUP_POLL_SECONDS="${WECHAT_DIRECT_CATCHUP_POLL_SECONDS:-0.1}"
 WECHAT_DISPLAY="${WECHAT_DISPLAY:-:97}"

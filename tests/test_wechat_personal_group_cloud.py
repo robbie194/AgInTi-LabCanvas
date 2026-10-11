@@ -310,6 +310,60 @@ class PersonalGroupCloudTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["pending"], 0)
         self.assertEqual(result["metrics"]["outbox"], 0)
 
+    def test_cloud_artifact_requires_explicit_https_origin(self):
+        with self.assertRaises(bridge.PersonalGroupCloudError):
+            bridge._download_artifact(
+                {"personal_group_cloud": {}},
+                {"url": "https://files.example/result.pdf", "name": "result.pdf"},
+            )
+        with self.assertRaises(bridge.PersonalGroupCloudError):
+            bridge._download_artifact(
+                {"personal_group_cloud": {"artifact_base_url": "https://cloud.example"}},
+                {"url": "https://other.example/result.pdf", "name": "result.pdf"},
+            )
+
+    def test_cloud_artifact_redirect_is_rejected_and_partial_file_removed(self):
+        handlers = []
+
+        class RedirectingOpener:
+            def open(self, request, timeout):
+                handlers[0].redirect_request(request, None, 302, "Found", {}, "https://other.example/file")
+
+        def build_redirect_rejecting_opener(handler):
+            handlers.append(handler)
+            return RedirectingOpener()
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            bridge, "PRIVATE", Path(directory)
+        ), mock.patch.object(bridge, "build_opener", side_effect=build_redirect_rejecting_opener):
+            with self.assertRaisesRegex(bridge.PersonalGroupCloudError, "redirects are not accepted"):
+                bridge._download_artifact(
+                    {"personal_group_cloud": {"artifact_base_url": "https://cloud.example"}},
+                    {"url": "https://cloud.example/wechat/files/token", "name": "result.pdf"},
+                )
+            self.assertEqual(list(Path(directory).rglob("*.partial")), [])
+
+    def test_file_outbox_sends_cloud_artifact_through_guarded_file_callback(self):
+        state = {"personal_group_cloud_outbox": [{
+            "id": "artifact-1",
+            "kind": "file",
+            "artifact": {"url": "https://cloud.example/wechat/files/token", "name": "result.pdf"},
+            "sourceRow": {},
+        }]}
+        sent = []
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "result.pdf"
+            path.write_bytes(b"pdf")
+            with mock.patch.object(bridge, "_download_artifact", return_value=path):
+                result = bridge._flush_outbox(
+                    self.config(), state, lambda *_args: None, time.time(),
+                    send_file=lambda _config, file_path: sent.append((file_path.name, file_path.read_bytes())),
+                )
+        self.assertEqual(result, ("", None))
+        self.assertEqual(sent, [("result.pdf", b"pdf")])
+        self.assertEqual(state["personal_group_cloud_outbox"], [])
+        self.assertFalse(path.exists())
+
     def test_outgoing_send_failure_is_saved_for_retry(self):
         client = FakeClient(bound=False)
         row = self.row(9, "customer-wxid", "绑定码无效")

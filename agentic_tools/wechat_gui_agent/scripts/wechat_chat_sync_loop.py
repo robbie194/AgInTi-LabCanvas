@@ -26,7 +26,10 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[3]
-PRIVATE = ROOT / "agentic_tools" / "wechat_gui_agent" / ".private"
+PRIVATE = Path(os.environ.get(
+    "WECHAT_AGENT_PRIVATE_DIR",
+    str(ROOT / "agentic_tools" / "wechat_gui_agent" / ".private"),
+)).expanduser().resolve()
 SUPERVISOR_ENV = PRIVATE / "wechat_supervisor.local.env"
 GUI_SEND = ROOT / "agentic_tools" / "wechat_gui_agent" / "scripts" / "wechat_gui_send.py"
 DEFAULT_QUEUE = PRIVATE / "wechat_task_queue.jsonl"

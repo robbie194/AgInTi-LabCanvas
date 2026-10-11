@@ -22,14 +22,18 @@ import time
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 
 LINK_CODE_RE = re.compile(r"^(?:绑定\s*)?([A-HJ-NP-Z2-9]{8})$", re.IGNORECASE)
 MAX_PENDING = 100
 MAX_ATTACHMENTS = 10
+MAX_ARTIFACT_BYTES = 100 * 1024 * 1024
 ROOT = Path(__file__).resolve().parents[3]
-PRIVATE = ROOT / "agentic_tools" / "wechat_gui_agent" / ".private"
+PRIVATE = Path(os.environ.get(
+    "WECHAT_AGENT_PRIVATE_DIR",
+    str(ROOT / "agentic_tools" / "wechat_gui_agent" / ".private"),
+)).expanduser().resolve()
 MEDIA_SYNC_SCRIPT = ROOT / "agentic_tools" / "wechat_gui_agent" / "scripts" / "wechat_media_sync.py"
 
 
@@ -254,7 +258,72 @@ def _enqueue_outgoing(state: dict[str, Any], text: str, source: dict[str, Any], 
     return stable_id
 
 
-def _flush_outbox(config: dict[str, Any], state: dict[str, Any], send_text: Callable[..., Any], now: float) -> tuple[str | None, str | None]:
+def _artifact_path(value: str) -> str:
+    name = Path(str(value or "artifact").replace("\\", "/")).name
+    name = re.sub(r"[^\w.\-\u0080-\uffff]+", "-", name).strip(".-")
+    return (name[:160] or "artifact")
+
+
+def _download_artifact(config: dict[str, Any], artifact: dict[str, Any]) -> Path:
+    url = str(artifact.get("url") or "").strip()
+    parsed = urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
+        raise PersonalGroupCloudError("Cloud returned an invalid artifact URL.")
+    expected_base = str(
+        (config.get("personal_group_cloud") or {}).get("artifact_base_url")
+        or os.environ.get("WECHAT_PERSONAL_GROUP_ARTIFACT_BASE_URL")
+        or ""
+    ).strip().rstrip("/")
+    base = urlsplit(expected_base)
+    if (
+        base.scheme != "https"
+        or not base.netloc
+        or base.path not in {"", "/"}
+        or base.query
+        or base.fragment
+        or base.username
+        or base.password
+        or parsed.scheme != "https"
+        or (base.scheme, base.netloc.lower()) != (parsed.scheme, parsed.netloc.lower())
+    ):
+        raise PersonalGroupCloudError("Cloud artifact URL must use the explicitly configured HTTPS artifact origin.")
+    request = Request(url, headers={"Accept": "application/octet-stream", "User-Agent": "OverTree-LabCanvas/1"})
+    filename = _artifact_path(artifact.get("name"))
+    artifact_key = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+    destination = (PRIVATE / "downloads" / "cloud-artifacts" / f"{artifact_key}-{filename}").resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(destination.name + ".partial")
+    total = 0
+    try:
+        class RejectRedirect(HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, new_url):
+                raise PersonalGroupCloudError("Cloud artifact redirects are not accepted.")
+
+        opener = build_opener(RejectRedirect())
+        with opener.open(request, timeout=30) as response, temporary.open("wb") as handle:
+            length = int(response.headers.get("Content-Length") or 0)
+            if length > MAX_ARTIFACT_BYTES:
+                raise PersonalGroupCloudError("Cloud artifact exceeds the local delivery limit.")
+            while True:
+                chunk = response.read(min(1024 * 1024, MAX_ARTIFACT_BYTES - total + 1))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_ARTIFACT_BYTES:
+                    raise PersonalGroupCloudError("Cloud artifact exceeds the local delivery limit.")
+                handle.write(chunk)
+        temporary.replace(destination)
+        return destination
+    except PersonalGroupCloudError:
+        temporary.unlink(missing_ok=True)
+        raise
+    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        temporary.unlink(missing_ok=True)
+        raise PersonalGroupCloudError("Could not download the Cloud artifact for WeChat delivery.", retryable=True) from exc
+
+
+def _flush_outbox(config: dict[str, Any], state: dict[str, Any], send_text: Callable[..., Any], now: float,
+                  send_file: Callable[..., Any] | None = None) -> tuple[str | None, str | None]:
     outbox = state.setdefault("personal_group_cloud_outbox", [])
     if not outbox:
         return None, None
@@ -267,7 +336,17 @@ def _flush_outbox(config: dict[str, Any], state: dict[str, Any], send_text: Call
     item["sendingAt"] = now
     _persist_local_state(config, state)
     try:
-        _send(send_text, config, state, str(item.get("text") or ""), item.get("sourceRow") or {}, str(item.get("kind") or "reply"))
+        kind = str(item.get("kind") or "reply")
+        if kind == "file":
+            if send_file is None:
+                raise PersonalGroupCloudError("This transport has no guarded file sender.")
+            artifact_path = _download_artifact(config, item.get("artifact") or {})
+            try:
+                send_file(config, artifact_path)
+            finally:
+                artifact_path.unlink(missing_ok=True)
+        else:
+            _send(send_text, config, state, str(item.get("text") or ""), item.get("sourceRow") or {}, kind)
     except Exception as exc:
         attempts = int(item.get("attempts") or 0) + 1
         item["attempts"] = attempts
@@ -498,6 +577,7 @@ def _claim_private_group_state(config: dict[str, Any], state: dict[str, Any], gr
 def run_once(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str, Any]], *, send: bool,
              eligible: Callable[[dict[str, Any]], bool], inbound: Callable[[dict[str, Any]], bool],
              visible_text: Callable[[dict[str, Any]], str], send_text: Callable[..., Any],
+             send_file: Callable[..., Any] | None = None,
              client_factory: Callable[[dict[str, Any]], tuple[PersonalGroupCloudClient, str]] = build_client) -> dict[str, Any]:
     """Submit/poll one bound group without invoking LabCanvas's local agent."""
     if not send:
@@ -668,7 +748,7 @@ def run_once(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str,
                 "binding-required",
             )
             state["personal_group_cloud_unbound_notified"] = True
-        sent_outgoing, send_error = _flush_outbox(config, state, send_text, now)
+        sent_outgoing, send_error = _flush_outbox(config, state, send_text, now, send_file)
         return {
             "response_sent": sent_outgoing,
             "task_enqueued": None,
@@ -698,13 +778,30 @@ def run_once(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str,
         result = str(receipt.get("result") or "").strip()
         if status in {"failed", "error", "stopped"}:
             result = result or "这次 OverTree 任务没有完成，请在 OverTree 会话中查看状态后重试。"
-        file_lines = [f"文件：{str(file.get('url') or '')}" for file in receipt.get("files", []) if isinstance(file, dict) and file.get("url")]
+        result_files = [file for file in receipt.get("files", []) if isinstance(file, dict) and file.get("url")]
+        file_lines = [f"文件：{str(file.get('url') or '')}" for file in result_files]
         outgoing = "\n\n".join(part for part in (result or "OverTree 已完成处理。", "\n".join(file_lines)) if part)
         source = item.get("sourceRow") if isinstance(item.get("sourceRow"), dict) else {}
         item["result"] = outgoing
         item["resultReady"] = True
         item["resultSource"] = source
         _enqueue_outgoing(state, outgoing, source, "result", message_id=f"result-{item['messageId']}")
+        if send_file is not None:
+            for index, artifact in enumerate(result_files):
+                file_id = _enqueue_outgoing(
+                    state,
+                    f"文件：{str(artifact.get('name') or f'artifact-{index + 1}')}",
+                    source,
+                    "file",
+                    message_id=f"result-file-{item['messageId']}-{index}",
+                )
+                for queued in state.get("personal_group_cloud_outbox", []):
+                    if isinstance(queued, dict) and str(queued.get("id") or "") == file_id:
+                        queued["artifact"] = {
+                            "url": str(artifact.get("url") or ""),
+                            "name": str(artifact.get("name") or f"artifact-{index + 1}"),
+                        }
+                        break
         remaining.append(item)
         break
     state["personal_group_cloud_pending"] = remaining
@@ -780,7 +877,7 @@ def run_once(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str,
             pass
 
     state["personal_group_cloud_pending"] = pending
-    sent_outgoing, send_error = _flush_outbox(config, state, send_text, now)
+    sent_outgoing, send_error = _flush_outbox(config, state, send_text, now, send_file)
     if sent_outgoing:
         response_sent = sent_outgoing
     if send_error:

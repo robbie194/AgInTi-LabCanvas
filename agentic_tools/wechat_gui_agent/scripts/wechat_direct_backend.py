@@ -20,7 +20,10 @@ from wechat_mirror import DEFAULT_DB, record_event
 
 
 ROOT = Path(__file__).resolve().parents[3]
-PRIVATE = ROOT / "agentic_tools" / "wechat_gui_agent" / ".private"
+PRIVATE = Path(os.environ.get(
+    "WECHAT_AGENT_PRIVATE_DIR",
+    str(ROOT / "agentic_tools" / "wechat_gui_agent" / ".private"),
+)).expanduser().resolve()
 EXTERNAL = PRIVATE / "external" / "wechat-decrypt"
 DEFAULT_REPO = "https://github.com/ylytdeng/wechat-decrypt.git"
 DEFAULT_WEB_PORT = 5678

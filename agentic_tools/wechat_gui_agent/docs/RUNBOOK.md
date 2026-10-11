@@ -10,6 +10,13 @@ changing monitor or worker behavior.
 
 ## 1. Launch
 
+For a second personal-WeChat account on this same Ubuntu workstation, use the
+[local Agent profile guide](../../../docs/WECHAT_PERSONAL_GROUP_LOCAL_PROFILE.md).
+It requires a dedicated Linux user and HOME in addition to a separate display;
+do not start a second WeChat account inside the normal user's profile. The
+profile's noVNC listener binds to localhost. Cloud replies are polled and sent
+from the local Agent GUI, so this flow does not need LazyEdge.
+
 ```bash
 agentic_tools/wechat_gui_agent/scripts/wechat_virtual_desktop.sh
 ```

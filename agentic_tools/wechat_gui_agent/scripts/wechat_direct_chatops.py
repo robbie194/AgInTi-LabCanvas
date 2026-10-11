@@ -67,7 +67,11 @@ from wechat_routines import (
 
 
 ROOT = Path(__file__).resolve().parents[3]
-PRIVATE = ROOT / "agentic_tools" / "wechat_gui_agent" / ".private"
+OUTPUT_ROOT = Path(os.environ.get("WECHAT_AGENT_LOG_DIR", str(ROOT / "output" / "wechat_gui_agent"))).expanduser().resolve()
+PRIVATE = Path(os.environ.get(
+    "WECHAT_AGENT_PRIVATE_DIR",
+    str(ROOT / "agentic_tools" / "wechat_gui_agent" / ".private"),
+)).expanduser().resolve()
 DEFAULT_CONFIG = PRIVATE / "lazy-research-direct-chatops.local.json"
 DEFAULT_STATE = PRIVATE / "lazy-research-direct-chatops.state.json"
 DECRYPTED = PRIVATE / "wechat_decrypt" / "decrypted"
@@ -550,6 +554,7 @@ def run_once(config: dict[str, Any], state: dict[str, Any], *, send: bool, no_de
             eligible=lambda row: is_inbound_user_row(config, row) and not response_already_recorded(state, row),
             visible_text=visible_message_text,
             send_text=send_gui_message,
+            send_file=send_gui_file,
         )
         if new_rows:
             advance_message_db_cursors(state, new_rows)
@@ -8554,6 +8559,36 @@ def send_gui_message(config: dict[str, Any], message: str) -> str:
     raise RuntimeError("; ".join(errors))
 
 
+def send_gui_file(config: dict[str, Any], file_path: Path) -> str:
+    """Send one exact Cloud artifact through the guarded GUI file lane."""
+    target = config.get("send_target")
+    if not (isinstance(target, dict) and target.get("name")):
+        raise RuntimeError(f"Refusing unguarded WeChat file send for {config.get('chat_name') or 'wechat-chat'}")
+    if gui_send_lock_busy():
+        raise RuntimeError("WECHAT_SEND_BUSY: serialized GUI sender is already sending; defer this file.")
+    with tempfile.NamedTemporaryFile("w+", suffix=".json", encoding="utf-8", delete=False) as handle:
+        target_file = Path(handle.name)
+        json.dump({"targets": [target], "message": ""}, handle, ensure_ascii=False)
+    command = [
+        sys.executable,
+        str(ROOT / "agentic_tools" / "wechat_gui_agent" / "scripts" / "wechat_gui_send.py"),
+        "--display", str(config.get("display") or ":97"),
+        "--targets-file", str(target_file),
+        "--file", str(file_path), "--send", "--prefer-current", "--no-search",
+        "--pause", str(config.get("send_pause_seconds", 0.35)),
+        "--mirror-db", str(Path(config.get("mirror_db", DEFAULT_DB))),
+    ]
+    try:
+        proc = run_subprocess_group(command, timeout=int(config.get("send_timeout_seconds", 60)), env=os.environ.copy())
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"WECHAT_FILE_SEND_TIMEOUT: GUI file sender timed out after {exc.timeout} seconds") from exc
+    finally:
+        target_file.unlink(missing_ok=True)
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or "WeChat file send failed")
+    return proc.stdout.strip()
+
+
 def send_gui_message_once(config: dict[str, Any], message: str) -> str:
     target = config.get("send_target")
     if not (isinstance(target, dict) and target.get("name")):
@@ -8605,7 +8640,7 @@ def send_gui_message_once(config: dict[str, Any], message: str) -> str:
         result = (data.get("results") or [{}])[-1]
         prefix = result.get("screenshot_prefix")
         if prefix:
-            return str(ROOT / "output" / "wechat_gui_agent" / datetime.now().strftime("%F") / f"{prefix}-sent.png")
+            return str(OUTPUT_ROOT / datetime.now().strftime("%F") / f"{prefix}-sent.png")
         return ""
     except Exception:
         return ""

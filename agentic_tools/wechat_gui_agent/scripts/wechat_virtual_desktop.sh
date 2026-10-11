@@ -6,8 +6,9 @@ ACTION="${1:-ensure}"
 DISPLAY_ID="${WECHAT_DISPLAY:-:97}"
 VNC_PORT="${WECHAT_VNC_PORT:-5917}"
 NOVNC_PORT="${WECHAT_NOVNC_PORT:-6107}"
-LOG_DIR="$ROOT/output/virtual_desktop/$(date +%F)"
-PRIVATE_DIR="$ROOT/agentic_tools/wechat_gui_agent/.private"
+LOG_DIR="${WECHAT_AGENT_LOG_DIR:-$ROOT/output/virtual_desktop/$(date +%F)}"
+PRIVATE_DIR="${WECHAT_AGENT_PRIVATE_DIR:-$ROOT/agentic_tools/wechat_gui_agent/.private}"
+WECHAT_HOME="${WECHAT_AGENT_HOME:-$HOME}"
 CLIENT_LOCK="$PRIVATE_DIR/wechat_client_lifecycle.lock"
 KEEP_AWAKE_INTERVAL="${WECHAT_KEEP_AWAKE_INTERVAL:-55}"
 MIN_WINDOW_WIDTH="${WECHAT_MIN_WINDOW_WIDTH:-640}"
@@ -76,7 +77,10 @@ wechat_pids_on_display() {
 }
 
 launch_wechat() {
-  env -u WAYLAND_DISPLAY \
+  env HOME="$WECHAT_HOME" XDG_CONFIG_HOME="${WECHAT_AGENT_XDG_CONFIG_HOME:-$WECHAT_HOME/.config}" \
+    XDG_DATA_HOME="${WECHAT_AGENT_XDG_DATA_HOME:-$WECHAT_HOME/.local/share}" \
+    XDG_CACHE_HOME="${WECHAT_AGENT_XDG_CACHE_HOME:-$WECHAT_HOME/.cache}" \
+    -u WAYLAND_DISPLAY \
     -u QT_PLUGIN_PATH \
     -u QT_QPA_PLATFORM_PLUGIN_PATH \
     -u QT_QPA_FONTDIR \

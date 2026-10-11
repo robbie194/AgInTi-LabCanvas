@@ -42,7 +42,10 @@ except ImportError:  # Optional local OCR-normalization aid.
 
 
 ROOT = Path(__file__).resolve().parents[3]
-PRIVATE = ROOT / "agentic_tools" / "wechat_gui_agent" / ".private"
+PRIVATE = Path(os.environ.get(
+    "WECHAT_AGENT_PRIVATE_DIR",
+    str(ROOT / "agentic_tools" / "wechat_gui_agent" / ".private"),
+)).expanduser().resolve()
 TITLE_T2S = OpenCC("t2s") if OpenCC is not None else None
 TITLE_SCRIPT_FOLD = str.maketrans(
     {
@@ -112,7 +115,9 @@ def main() -> int:
     parser.add_argument("--prefer-current", action="store_true", help="If the visible chat title already matches, send there without searching first.")
     parser.add_argument("--allow-search", action="store_true", help="Allow WeChat search fallback. Disabled by default.")
     parser.add_argument("--no-search", action="store_true", help="Compatibility flag; search is already disabled unless --allow-search is passed.")
-    parser.add_argument("--output-dir", type=Path, default=ROOT / "output" / "wechat_gui_agent" / datetime.now().strftime("%F"))
+    parser.add_argument("--output-dir", type=Path, default=Path(os.environ.get(
+        "WECHAT_AGENT_LOG_DIR", str(ROOT / "output" / "wechat_gui_agent")
+    )) / datetime.now().strftime("%F"))
     parser.add_argument("--mirror-db", type=Path, default=DEFAULT_DB, help="SQLite mirror database path.")
     parser.add_argument("--download-file-title", default="", help="Open and download the exact visible WeChat file card title without sending a message.")
     parser.add_argument("--download-root", type=Path, default=Path.home() / "Documents" / "xwechat_files")

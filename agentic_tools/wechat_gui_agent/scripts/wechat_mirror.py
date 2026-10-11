@@ -13,7 +13,10 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_DB = ROOT / "agentic_tools" / "wechat_gui_agent" / ".private" / "wechat_mirror.sqlite"
+DEFAULT_DB = Path(os.environ.get(
+    "WECHAT_AGENT_PRIVATE_DIR",
+    str(ROOT / "agentic_tools" / "wechat_gui_agent" / ".private"),
+)).expanduser().resolve() / "wechat_mirror.sqlite"
 
 
 def init_db(db_path: Path = DEFAULT_DB) -> None:

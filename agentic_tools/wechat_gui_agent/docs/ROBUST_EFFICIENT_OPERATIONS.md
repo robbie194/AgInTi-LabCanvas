@@ -98,7 +98,19 @@ keep binding-code recovery idempotent so a committed Cloud claim is never
 forwarded into the customer's conversation after a lost response. This uses
 the operator's personal WeChat account and is not an official Tencent bot API;
 do not promise zero account risk. See the
-[Cloud coaching-group guide](../../../docs/WECHAT_PERSONAL_GROUP_CLOUD.md).
+[local Agent profile guide](../../../docs/WECHAT_PERSONAL_GROUP_LOCAL_PROFILE.md).
+
+On a shared Ubuntu workstation, run Agent-WeChat under a dedicated Linux user,
+HOME/XDG directories, private LabCanvas data directory, and its own X display.
+Two processes or two virtual displays under the normal user's HOME do not
+isolate WeChat account caches and locks. The local adapter initiates HMAC
+submissions and polls Cloud; it downloads allowed result artifacts from the
+configured HTTPS Cloud origin and sends them through the exact-title guarded
+GUI sender. Cloud does not need to reach the workstation, so LazyEdge is not
+part of the first deployment. Keep noVNC bound to localhost and do not expose
+the Cloud `/internal/*` routes publicly. See
+[`docs/WECHAT_PERSONAL_GROUP_LOCAL_PROFILE.md`](../../../docs/WECHAT_PERSONAL_GROUP_LOCAL_PROFILE.md)
+for the host setup and acceptance sequence.
 
 ## Operating Model
 

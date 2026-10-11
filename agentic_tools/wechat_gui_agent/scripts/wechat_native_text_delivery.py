@@ -14,7 +14,10 @@ import unicodedata
 from wechat_reply_mentions import mention_header
 
 
-PRIVATE = Path(__file__).resolve().parents[1] / ".private"
+PRIVATE = Path(os.environ.get(
+    "WECHAT_AGENT_PRIVATE_DIR",
+    str(Path(__file__).resolve().parents[1] / ".private"),
+)).expanduser().resolve()
 
 
 def normalize_text(value: str) -> str:

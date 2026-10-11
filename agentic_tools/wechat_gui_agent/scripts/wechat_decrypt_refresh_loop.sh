@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
-PRIVATE="$ROOT/agentic_tools/wechat_gui_agent/.private"
+PRIVATE="${WECHAT_AGENT_PRIVATE_DIR:-$ROOT/agentic_tools/wechat_gui_agent/.private}"
 PY="$PRIVATE/wechat_decrypt/.venv/bin/python"
 BACKEND="$ROOT/agentic_tools/wechat_gui_agent/scripts/wechat_direct_backend.py"
 LOCK="$PRIVATE/wechat_decrypt.refresh.lock"
