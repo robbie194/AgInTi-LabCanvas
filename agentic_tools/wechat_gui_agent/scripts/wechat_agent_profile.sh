@@ -40,6 +40,7 @@ WECHAT_PERSONAL_GROUP_CLOUD_URL=
 WECHAT_PERSONAL_GROUP_ARTIFACT_BASE_URL=https://cloud.overtree.top
 WECHAT_PERSONAL_GROUP_SHARED_SECRET=
 WECHAT_PERSONAL_GROUP_AGENT_ACCOUNT_ID=personal-agent-main
+WECHAT_PERSONAL_GROUP_ALLOWLIST=
 EOF
   chmod 600 "$ENV_FILE"
 }
@@ -119,8 +120,14 @@ case "$ACTION" in
       echo "wechat_process=not_running"
     fi
     ;;
+  add-group)
+    require_agent_os_user
+    [[ -f "$ENV_FILE" ]] || write_env
+    exec env HOME="$WECHAT_AGENT_HOME" WECHAT_AGENT_PRIVATE_DIR="$WECHAT_AGENT_PRIVATE_DIR" WECHAT_AGENT_ENV_FILE="$ENV_FILE" \
+      "$ROOT/agentic_tools/wechat_gui_agent/scripts/wechat_agent_group_config.py" "${@:2}"
+    ;;
   *)
-    echo "Usage: $0 init|env|check|desktop|start|ensure|stop|restart|reload-workers|reload-monitors|reload-unlock|restart-all|status" >&2
+    echo "Usage: $0 init|env|check|desktop|add-group|start|ensure|stop|restart|reload-workers|reload-monitors|reload-unlock|restart-all|status" >&2
     exit 2
     ;;
 esac

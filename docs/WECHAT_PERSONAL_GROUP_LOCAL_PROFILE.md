@@ -40,6 +40,16 @@ sudo -u overtree-wechat env \
 其中的 `WECHAT_DIRECT_CONFIGS` 需要填写每个已登记群的私有 JSON；个人群 Cloud 开关和独立 HMAC secret 也只放在这个文件或系统 secret store，不进 Git。
 文件回传还需要设置 `WECHAT_PERSONAL_GROUP_ARTIFACT_BASE_URL=https://cloud.overtree.top`。此值必须和 Cloud 返回的文件 URL 域名一致；下载器只接受这个 HTTPS 来源，并拒绝跨域重定向。
 
+服务器和本机已经预置了同一组随机 HMAC secret，但本机 Agent 用户尚未创建时不要复制普通用户的 profile。创建 `overtree-wechat` 并初始化 profile 后，用管理员权限把 secret 写入 Agent profile（命令不会打印 secret）：
+
+```bash
+sudo sh -c '
+  secret=$(cat /home/robbie/.local/share/overtree-wechat-cloud.secret)
+  sed -i "s|^WECHAT_PERSONAL_GROUP_SHARED_SECRET=.*$|WECHAT_PERSONAL_GROUP_SHARED_SECRET=$secret|" \
+    /home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private/wechat_supervisor.local.env
+'
+```
+
 ## 启动虚拟桌面和登录
 
 先只启动桌面，不启动 supervisor：
@@ -65,6 +75,33 @@ sudo -u overtree-wechat env HOME=/home/overtree-wechat \
   agentic_tools/wechat_gui_agent/scripts/wechat_agent_profile.sh check
 ```
 
+登录成功后，在 Agent profile 下安装私有解密后端并初始化配置：
+
+```bash
+sudo -u overtree-wechat env HOME=/home/overtree-wechat \
+  WECHAT_AGENT_HOME=/home/overtree-wechat/.local/share/overtree-wechat \
+  WECHAT_AGENT_PRIVATE_DIR=/home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private \
+  python3 agentic_tools/wechat_gui_agent/scripts/wechat_direct_backend.py install
+sudo -u overtree-wechat env HOME=/home/overtree-wechat \
+  WECHAT_AGENT_HOME=/home/overtree-wechat/.local/share/overtree-wechat \
+  WECHAT_AGENT_PRIVATE_DIR=/home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private \
+  python3 agentic_tools/wechat_gui_agent/scripts/wechat_direct_backend.py find-keys
+```
+
+随后运行 `decrypt --incremental`，从解密后的联系人库确认群名对应的 `group_id`、消息表和 Agent `self_wxid`。每个实际群只登记一次，生成独立 state/config：
+
+```bash
+sudo -u overtree-wechat env HOME=/home/overtree-wechat \
+  WECHAT_AGENT_HOME=/home/overtree-wechat/.local/share/overtree-wechat \
+  WECHAT_AGENT_PRIVATE_DIR=/home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private \
+  WECHAT_AGENT_ENV_FILE=/home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private/wechat_supervisor.local.env \
+  agentic_tools/wechat_gui_agent/scripts/wechat_agent_profile.sh add-group \
+  --group-name "客户辅导群" --group-id "<GROUP_ID>" \
+  --self-wxid "<AGENT_WXID>" --message-table "<MSG_TABLE>"
+```
+
+首次验收前保持 `--enable` 不使用；确认群名、标题守卫、绑定码和文件发送都正确后，再在本机 profile 开关和 Cloud 运行环境中按部署窗口同时启用。
+
 ## Cloud 连接方式
 
 第一版不需要 LazyEdge。工作机主动向 Cloud 提交消息并轮询结果：
@@ -77,6 +114,19 @@ LabCanvas 通过 :97 的 Agent 微信 GUI 把文本和文件发回原群
 ```
 
 Cloud 不需要主动连接本机。工作机主动向 Cloud 提交消息、轮询结果；文件也由工作机主动通过 HTTPS 下载，然后由本地微信客户端发送。因此结果回群不需要 LazyEdge。Cloud 的 `/internal/*` 路由不对公网开放，内部 API 仍需 VPN 或 SSH 本地转发。例如把 Cloud 本机 `127.0.0.1:3220` 映射到工作机的 `127.0.0.1:33220`，再在 Agent profile 中设置：
+
+先由当前 Ubuntu 用户启动本地转发（不能由 `overtree-wechat` 用户启动，因为 SSH 私钥属于当前用户）：
+
+```bash
+agentic_tools/wechat_gui_agent/scripts/wechat_cloud_tunnel.sh ensure
+```
+
+它只监听 `127.0.0.1:33220`，断线后自动重连。检查或停止：
+
+```bash
+agentic_tools/wechat_gui_agent/scripts/wechat_cloud_tunnel.sh status
+agentic_tools/wechat_gui_agent/scripts/wechat_cloud_tunnel.sh stop
+```
 
 ```dotenv
 WECHAT_PERSONAL_GROUP_CLOUD_URL=http://127.0.0.1:33220

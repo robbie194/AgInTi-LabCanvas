@@ -225,7 +225,7 @@ class PersonalGroupCloudTests(unittest.TestCase):
         self.assertEqual(message["actorId"], "support-wxid")
         self.assertEqual(message["content"], "@OverTree 补充一个背景")
         self.assertEqual(result["metrics"]["pending"], 1)
-        self.assertFalse(sent)
+        self.assertEqual(sent, ["已收到，OverTree 正在处理。完成后会把结果发到本群。"])
 
     def test_claim_code_and_next_same_poll_message_are_both_processed(self):
         client = FakeClient(bound=False)
@@ -306,9 +306,18 @@ class PersonalGroupCloudTests(unittest.TestCase):
         sent = []
         result = self.run_once(client, [], state=state, send_text=lambda _config, text: sent.append(text))
         self.assertEqual(client.polled, [("group-exact-1", "message_4.db:server-7:7")])
-        self.assertEqual(sent, ["已完成\n\n文件：https://cloud.example/result.pdf"])
+        self.assertEqual(sent, ["已完成"])
+        self.assertNotIn("https://cloud.example", sent[0])
         self.assertEqual(result["metrics"]["pending"], 0)
         self.assertEqual(result["metrics"]["outbox"], 0)
+
+    def test_new_cloud_task_sends_the_same_processing_ack_as_enterprise_group(self):
+        client = FakeClient()
+        row = self.row(20, "customer-wxid", "@OverTree 请分析这份资料")
+        sent = []
+        result = self.run_once(client, [row], send_text=lambda _config, text: sent.append(text))
+        self.assertEqual(result["task_enqueued"], "run-1")
+        self.assertEqual(sent, ["已收到，OverTree 正在处理。完成后会把结果发到本群。"])
 
     def test_cloud_artifact_requires_explicit_https_origin(self):
         with self.assertRaises(bridge.PersonalGroupCloudError):

@@ -29,6 +29,7 @@ LINK_CODE_RE = re.compile(r"^(?:绑定\s*)?([A-HJ-NP-Z2-9]{8})$", re.IGNORECASE)
 MAX_PENDING = 100
 MAX_ATTACHMENTS = 10
 MAX_ARTIFACT_BYTES = 100 * 1024 * 1024
+MAX_RESULT_FILES = 8
 ROOT = Path(__file__).resolve().parents[3]
 PRIVATE = Path(os.environ.get(
     "WECHAT_AGENT_PRIVATE_DIR",
@@ -775,12 +776,20 @@ def run_once(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str,
             item["nextPollAt"] = now + min(30, 2 ** min(attempts_count, 5))
             remaining.append(item)
             continue
-        result = str(receipt.get("result") or "").strip()
         if status in {"failed", "error", "stopped"}:
-            result = result or "这次 OverTree 任务没有完成，请在 OverTree 会话中查看状态后重试。"
-        result_files = [file for file in receipt.get("files", []) if isinstance(file, dict) and file.get("url")]
-        file_lines = [f"文件：{str(file.get('url') or '')}" for file in result_files]
-        outgoing = "\n\n".join(part for part in (result or "OverTree 已完成处理。", "\n".join(file_lines)) if part)
+            if status == "stopped":
+                result = "这次 OverTree 任务因服务重启或停止而中断，结果没有完成。你可以稍后在 OverTree 会话中继续。"
+            else:
+                result = "这次 OverTree 任务没有完成。请稍后重试，或打开 OverTree 查看任务状态。"
+        else:
+            result = str(receipt.get("result") or receipt.get("reply") or "OverTree 已完成处理，但没有返回可发送的文字摘要。请打开 OverTree 项目查看完整结果和文件。").strip()
+        # Keep artifact URLs private. The enterprise WeChat transports send the
+        # text summary first, then deliver each allowed artifact as native media.
+        outgoing = result or "OverTree 已完成处理，但没有返回可发送的文字摘要。请打开 OverTree 项目查看完整结果和文件。"
+        result_files = [
+            file for file in receipt.get("files", [])
+            if isinstance(file, dict) and file.get("url")
+        ][:MAX_RESULT_FILES]
         source = item.get("sourceRow") if isinstance(item.get("sourceRow"), dict) else {}
         item["result"] = outgoing
         item["resultReady"] = True
@@ -872,6 +881,13 @@ def run_once(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str,
         item["submitted"] = True
         item["submittedAt"] = int(now)
         task_enqueued = str(receipt.get("responseId") or item["messageId"])
+        _enqueue_outgoing(
+            state,
+            "已收到，OverTree 正在处理。完成后会把结果发到本群。",
+            item.get("sourceRow") or {},
+            "ack",
+            message_id=f"ack-{item['messageId']}",
+        )
         if str(receipt.get("status") or "running").lower() not in {"running", "queued", "processing", "starting"}:
             # The next loop performs the same idempotent poll/delivery path.
             pass

@@ -15,7 +15,9 @@ For a second personal-WeChat account on this same Ubuntu workstation, use the
 It requires a dedicated Linux user and HOME in addition to a separate display;
 do not start a second WeChat account inside the normal user's profile. The
 profile's noVNC listener binds to localhost. Cloud replies are polled and sent
-from the local Agent GUI, so this flow does not need LazyEdge.
+from the local Agent GUI. Start the local-only Cloud tunnel with
+`agentic_tools/wechat_gui_agent/scripts/wechat_cloud_tunnel.sh ensure`; this
+flow does not need LazyEdge.
 
 ```bash
 agentic_tools/wechat_gui_agent/scripts/wechat_virtual_desktop.sh
