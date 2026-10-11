@@ -9,6 +9,7 @@ NOVNC_PORT="${WECHAT_NOVNC_PORT:-6107}"
 LOG_DIR="${WECHAT_AGENT_LOG_DIR:-$ROOT/output/virtual_desktop/$(date +%F)}"
 PRIVATE_DIR="${WECHAT_AGENT_PRIVATE_DIR:-$ROOT/agentic_tools/wechat_gui_agent/.private}"
 WECHAT_HOME="${WECHAT_AGENT_HOME:-$HOME}"
+WECHAT_BINARY="${WECHAT_BINARY:-/usr/bin/wechat}"
 CLIENT_LOCK="$PRIVATE_DIR/wechat_client_lifecycle.lock"
 KEEP_AWAKE_INTERVAL="${WECHAT_KEEP_AWAKE_INTERVAL:-55}"
 MIN_WINDOW_WIDTH="${WECHAT_MIN_WINDOW_WIDTH:-640}"
@@ -73,10 +74,14 @@ wechat_pids_on_display() {
     if tr '\0' '\n' <"/proc/$pid/environ" | grep -Fxq "DISPLAY=$DISPLAY_ID"; then
       printf '%s\n' "$pid"
     fi
-  done < <(pgrep -f '^/usr/bin/wechat([[:space:]]|$)' 2>/dev/null || true)
+  done < <(pgrep -f '(^|/)wechat([[:space:]]|$)' 2>/dev/null || true)
 }
 
 launch_wechat() {
+  if [[ ! -x "$WECHAT_BINARY" ]]; then
+    echo "Configured WeChat client is missing or not executable: $WECHAT_BINARY" >>"$APP_LOG"
+    return 127
+  fi
   env \
     -u WAYLAND_DISPLAY \
     -u QT_PLUGIN_PATH \
@@ -88,7 +93,7 @@ launch_wechat() {
     XDG_DATA_HOME="${WECHAT_AGENT_XDG_DATA_HOME:-$WECHAT_HOME/.local/share}" \
     XDG_CACHE_HOME="${WECHAT_AGENT_XDG_CACHE_HOME:-$WECHAT_HOME/.cache}" \
     DISPLAY="$DISPLAY_ID" XAUTHORITY= NO_AT_BRIDGE=1 QT_QPA_PLATFORM=xcb \
-    setsid -f /usr/bin/wechat 9>&- >>"$APP_LOG" 2>&1
+    setsid -f "$WECHAT_BINARY" 9>&- >>"$APP_LOG" 2>&1
 }
 
 wait_for_main_window() {
@@ -189,6 +194,8 @@ elif [[ -n "$visible_window" ]]; then
 else
   echo "WARNING: no visible WeChat window on $DISPLAY_ID; noVNC will show only the X root background." >>"$APP_LOG"
 fi
+
+echo "Selected WeChat client: $WECHAT_BINARY" >>"$APP_LOG"
 
 cat "$LAUNCH_LOG"
 echo

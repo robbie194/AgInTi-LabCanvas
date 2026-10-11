@@ -12,12 +12,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "agentic_tools" / "virtual_desktop" / "launch_virtual_desktop.sh"
 WECHAT = ROOT / "agentic_tools" / "wechat_gui_agent" / "scripts" / "wechat_virtual_desktop.sh"
+PROFILE = ROOT / "agentic_tools" / "wechat_gui_agent" / "scripts" / "wechat_agent_profile.sh"
 ANDROID = ROOT / "agentic_tools" / "android_device_agent" / "scripts" / "android_device_desktop.sh"
 
 
 class VirtualDesktopLifecycleTests(unittest.TestCase):
     def test_scripts_are_valid_bash(self) -> None:
-        for script in (LAUNCHER, WECHAT, ANDROID):
+        for script in (LAUNCHER, WECHAT, PROFILE, ANDROID):
             with self.subTest(script=script.name):
                 result = subprocess.run(
                     ["bash", "-n", str(script)],
@@ -78,6 +79,13 @@ class VirtualDesktopLifecycleTests(unittest.TestCase):
         source = WECHAT.read_text(encoding="utf-8")
         self.assertIn('-- /bin/true 9>&- >"$LAUNCH_LOG"', source)
 
+    def test_profile_can_restart_only_the_isolated_desktop_client(self) -> None:
+        source = PROFILE.read_text(encoding="utf-8")
+        self.assertIn('WECHAT_BINARY=/usr/bin/wechat', source)
+        self.assertIn('DESKTOP_ACTION="${2:-ensure}"', source)
+        self.assertIn('ensure|restart-client)', source)
+        self.assertIn('wechat_virtual_desktop.sh" "$DESKTOP_ACTION"', source)
+
     def test_wechat_preserves_small_visible_login_window(self) -> None:
         source = WECHAT.read_text(encoding="utf-8")
         self.assertIn("wechat_visible_window()", source)
@@ -115,6 +123,10 @@ class VirtualDesktopLifecycleTests(unittest.TestCase):
                 encoding="utf-8",
             )
             fake_setsid.chmod(0o755)
+            fake_client = temp / "client" / "wechat"
+            fake_client.parent.mkdir()
+            fake_client.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_client.chmod(0o755)
             app_log = temp / "wechat_app.log"
             shell = "\n".join(
                 [
@@ -123,6 +135,7 @@ class VirtualDesktopLifecycleTests(unittest.TestCase):
                     f"WECHAT_AGENT_XDG_CONFIG_HOME={shlex.quote(str(temp / 'config'))}",
                     f"WECHAT_AGENT_XDG_DATA_HOME={shlex.quote(str(temp / 'data'))}",
                     f"WECHAT_AGENT_XDG_CACHE_HOME={shlex.quote(str(temp / 'cache'))}",
+                    f"WECHAT_BINARY={shlex.quote(str(fake_client))}",
                     "DISPLAY_ID=:97",
                     f"APP_LOG={shlex.quote(str(app_log))}",
                     f"PATH={shlex.quote(str(temp))}:$PATH",
@@ -154,7 +167,8 @@ class VirtualDesktopLifecycleTests(unittest.TestCase):
             "qt_style_override",
         ):
             self.assertIsNone(payload[variable], variable)
-        self.assertEqual(payload["argv"], ["-f", "/usr/bin/wechat"])
+        self.assertEqual(payload["argv"], ["-f", str(fake_client)])
+        self.assertIn("pgrep -f '(^|/)wechat([[:space:]]|$)'", source)
 
 
 if __name__ == "__main__":

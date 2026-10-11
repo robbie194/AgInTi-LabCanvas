@@ -33,6 +33,7 @@ WECHAT_AGENT_LOG_DIR=$LOG_DIR
 WECHAT_DISPLAY=:97
 WECHAT_VNC_PORT=5917
 WECHAT_NOVNC_PORT=6107
+WECHAT_BINARY=/usr/bin/wechat
 WECHAT_SUPERVISOR_SESSION=labcanvas-wechat-agent
 WECHAT_DIRECT_CONFIGS=
 WECHAT_PERSONAL_GROUP_ENABLED=false
@@ -95,6 +96,11 @@ case "$ACTION" in
     ;;
   desktop)
     require_agent_os_user
+    DESKTOP_ACTION="${2:-ensure}"
+    case "$DESKTOP_ACTION" in
+      ensure|restart-client) ;;
+      *) echo "Usage: $0 desktop [ensure|restart-client]" >&2; exit 2 ;;
+    esac
     [[ -f "$ENV_FILE" ]] || write_env
     set -a
     # shellcheck disable=SC1090
@@ -104,7 +110,7 @@ case "$ACTION" in
       XDG_DATA_HOME="$WECHAT_AGENT_XDG_DATA_HOME" XDG_CACHE_HOME="$WECHAT_AGENT_XDG_CACHE_HOME" \
       WECHAT_AGENT_PRIVATE_DIR="$WECHAT_AGENT_PRIVATE_DIR" WECHAT_AGENT_HOME="$WECHAT_AGENT_HOME" \
       WECHAT_AGENT_PROFILE_REQUIRED=1 \
-      "$ROOT/agentic_tools/wechat_gui_agent/scripts/wechat_virtual_desktop.sh"
+      "$ROOT/agentic_tools/wechat_gui_agent/scripts/wechat_virtual_desktop.sh" "$DESKTOP_ACTION"
     ;;
   check)
     [[ -f "$ENV_FILE" ]] || { echo "Profile is not initialized: $ENV_FILE" >&2; exit 2; }
@@ -112,8 +118,8 @@ case "$ACTION" in
     # shellcheck disable=SC1090
     source "$ENV_FILE"
     set +a
-    printf 'profile_home=%s\nprivate_dir=%s\ndisplay=%s\nnovnc_port=%s\n' \
-      "$WECHAT_AGENT_HOME" "$WECHAT_AGENT_PRIVATE_DIR" "${WECHAT_DISPLAY:-:97}" "${WECHAT_NOVNC_PORT:-6107}"
+    printf 'profile_home=%s\nprivate_dir=%s\ndisplay=%s\nnovnc_port=%s\nwechat_binary=%s\n' \
+      "$WECHAT_AGENT_HOME" "$WECHAT_AGENT_PRIVATE_DIR" "${WECHAT_DISPLAY:-:97}" "${WECHAT_NOVNC_PORT:-6107}" "${WECHAT_BINARY:-/usr/bin/wechat}"
     if pgrep -af '^/usr/bin/wechat([[:space:]]|$)' >/dev/null 2>&1; then
       echo "warning=an existing Linux WeChat process is running; verify it is a different account before starting Agent-WeChat"
     else
@@ -127,7 +133,7 @@ case "$ACTION" in
       "$ROOT/agentic_tools/wechat_gui_agent/scripts/wechat_agent_group_config.py" "${@:2}"
     ;;
   *)
-    echo "Usage: $0 init|env|check|desktop|add-group|start|ensure|stop|restart|reload-workers|reload-monitors|reload-unlock|restart-all|status" >&2
+    echo "Usage: $0 init|env|check|desktop [ensure|restart-client]|add-group|start|ensure|stop|restart|reload-workers|reload-monitors|reload-unlock|restart-all|status" >&2
     exit 2
     ;;
 esac

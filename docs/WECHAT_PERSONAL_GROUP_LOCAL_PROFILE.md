@@ -78,6 +78,30 @@ sudo -u overtree-wechat env HOME=/home/overtree-wechat \
   /opt/overtree-labcanvas/agentic_tools/wechat_gui_agent/scripts/wechat_agent_profile.sh check
 ```
 
+如果登录页提示微信版本过低，不要直接用 `dpkg -i` 覆盖系统 `/opt/wechat`：`/usr/bin/wechat` 是共享入口，日常账号进程也从这里启动。可把腾讯官方 Linux `.deb` 解压到 Agent 私有目录，并只切换 Agent profile：
+
+```bash
+sudo -u overtree-wechat dpkg-deb --extract /tmp/WeChatLinux_x86_64.deb \
+  /home/overtree-wechat/.local/share/overtree-wechat/client
+
+sudo -u overtree-wechat sh -c '
+  env_file=/home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private/wechat_supervisor.local.env
+  value=WECHAT_BINARY=/home/overtree-wechat/.local/share/overtree-wechat/client/opt/wechat/wechat
+  if grep -q "^WECHAT_BINARY=" "$env_file"; then
+    sed -i "s|^WECHAT_BINARY=.*$|$value|" "$env_file"
+  else
+    printf "\\n%s\\n" "$value" >>"$env_file"
+  fi
+'
+
+sudo -u overtree-wechat env \
+  HOME=/home/overtree-wechat \
+  WECHAT_AGENT_HOME=/home/overtree-wechat/.local/share/overtree-wechat \
+  /opt/overtree-labcanvas/agentic_tools/wechat_gui_agent/scripts/wechat_agent_profile.sh desktop restart-client
+```
+
+先用 `dpkg-deb -f /tmp/WeChatLinux_x86_64.deb Version Architecture` 确认包版本和 `amd64` 架构，再解压。下载包应来自腾讯 Linux 微信官网/官方 CDN。`restart-client` 只关闭并重启 `DISPLAY=:97` 上的 Agent 客户端；生活微信仍使用共享安装，不会被切换。
+
 登录成功后，在 Agent profile 下安装私有解密后端并初始化配置：
 
 ```bash

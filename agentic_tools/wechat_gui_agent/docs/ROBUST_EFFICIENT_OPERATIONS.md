@@ -127,6 +127,14 @@ Use the current `wechat_virtual_desktop.sh`, install it into a root-owned
 page. Keep the normal user's WeChat process and HOME untouched; recovery must
 target only the isolated Agent display and account.
 
+If the login screen says the WeChat version is too old, check the package
+metadata with `dpkg-deb -f <package.deb> Version Architecture`. The desktop
+profile accepts `WECHAT_BINARY` so a Tencent `.deb` can be extracted under the
+Agent's private profile and switched there with `wechat_agent_profile.sh
+desktop restart-client`. Do not replace the shared `/opt/wechat` installation
+while the normal account uses it. The restart matches the WeChat executable
+path but terminates only its process whose environment points at `:97`.
+
 ## Operating Model
 
 Treat WeChat as a communication bridge, not as the executor. A WeChat message

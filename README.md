@@ -82,6 +82,9 @@ The guide includes a loopback-only SSH tunnel and `wechat_agent_profile.sh
 add-group`, which creates one private state/config per exact group.
 If noVNC opens to a black screen, use the
 [virtual desktop startup troubleshooting guide](agentic_tools/wechat_gui_agent/docs/ROBUST_EFFICIENT_OPERATIONS.md#virtual-desktop-startup-troubleshooting).
+When Tencent requires a newer Linux WeChat, the Agent can use a private client
+binary through `WECHAT_BINARY`, leaving the normal account's shared install
+unchanged; see the local profile guide above.
 
 ## Quick Start
 
