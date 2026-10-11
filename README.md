@@ -80,6 +80,8 @@ beside a normal WeChat account, use the [local Agent-WeChat profile and
 acceptance guide](docs/WECHAT_PERSONAL_GROUP_LOCAL_PROFILE.md).
 The guide includes a loopback-only SSH tunnel and `wechat_agent_profile.sh
 add-group`, which creates one private state/config per exact group.
+If noVNC opens to a black screen, use the
+[virtual desktop startup troubleshooting guide](agentic_tools/wechat_gui_agent/docs/ROBUST_EFFICIENT_OPERATIONS.md#virtual-desktop-startup-troubleshooting).
 
 ## Quick Start
 

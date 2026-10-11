@@ -112,6 +112,21 @@ the Cloud `/internal/*` routes publicly. See
 [`docs/WECHAT_PERSONAL_GROUP_LOCAL_PROFILE.md`](../../../docs/WECHAT_PERSONAL_GROUP_LOCAL_PROFILE.md)
 for the host setup and acceptance sequence.
 
+## Virtual Desktop Startup Troubleshooting
+
+An HTTP 200 from noVNC proves only that the web page is served. A black canvas
+can mean the selected X display has no WeChat window. Check the exact display
+with `DISPLAY=:97 xwininfo -root -tree` and read
+`/home/overtree-wechat/.local/share/overtree-wechat/logs/wechat_app.log`.
+If the tree contains only a 1x1 child and the log says
+`env: '-u': No such file or directory`, WeChat was never launched: GNU `env`
+options such as `-u WAYLAND_DISPLAY` must precede every `NAME=value` argument.
+Use the current `wechat_virtual_desktop.sh`, install it into a root-owned
+`/opt/overtree-labcanvas` code root if that is the active profile, then rerun
+`wechat_agent_profile.sh desktop` as `overtree-wechat` and refresh the noVNC
+page. Keep the normal user's WeChat process and HOME untouched; recovery must
+target only the isolated Agent display and account.
+
 ## Operating Model
 
 Treat WeChat as a communication bridge, not as the executor. A WeChat message
