@@ -28,8 +28,12 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 LINK_CODE_RE = re.compile(r"^(?:绑定\s*)?([A-HJ-NP-Z2-9]{8})$", re.IGNORECASE)
 MAX_PENDING = 100
 MAX_ATTACHMENTS = 10
-MAX_ARTIFACT_BYTES = 100 * 1024 * 1024
-MAX_RESULT_FILES = 8
+WECHAT_DELIVERY_PLAN_V1_LIMITS = {
+    "maxTextBytes": 1800,
+    "maxMessages": 5,
+    "maxMediaFiles": 4,
+    "maxArtifactBytes": 50 * 1024 * 1024,
+}
 ROOT = Path(__file__).resolve().parents[3]
 PRIVATE = Path(os.environ.get(
     "WECHAT_AGENT_PRIVATE_DIR",
@@ -212,6 +216,38 @@ def _utf8_limit(value: str, maximum_bytes: int = 30_000) -> str:
     return str(value or "").encode("utf-8")[:maximum_bytes].decode("utf-8", errors="ignore").strip()
 
 
+def _validate_delivery_plan(receipt: dict[str, Any]) -> dict[str, Any]:
+    plan = receipt.get("deliveryPlan") if isinstance(receipt, dict) else None
+    if not isinstance(plan, dict) or plan.get("version") != 1:
+        raise PersonalGroupCloudError("OverTree Cloud returned an unsupported WeChat delivery plan.", status_code=502, retryable=True)
+    limits = plan.get("limits")
+    text_parts = plan.get("textParts")
+    files = plan.get("files")
+    if not isinstance(limits, dict) or not isinstance(text_parts, list) or not text_parts or not isinstance(files, list):
+        raise PersonalGroupCloudError("OverTree Cloud returned an invalid WeChat delivery plan.", status_code=502, retryable=True)
+    limit_names = ("maxTextBytes", "maxMessages", "maxMediaFiles", "maxArtifactBytes")
+    if any(not isinstance(limits.get(name), int) or isinstance(limits.get(name), bool) or limits[name] <= 0 for name in limit_names):
+        raise PersonalGroupCloudError("OverTree Cloud returned invalid WeChat delivery limits.", status_code=502, retryable=True)
+    if limits != WECHAT_DELIVERY_PLAN_V1_LIMITS:
+        raise PersonalGroupCloudError("OverTree Cloud returned unsupported WeChat delivery limits.", status_code=502, retryable=True)
+    if len(files) > limits["maxMediaFiles"] or len(files) > limits["maxMessages"] or len(text_parts) + len(files) > limits["maxMessages"]:
+        raise PersonalGroupCloudError("OverTree Cloud returned a WeChat delivery plan over its message limit.", status_code=502, retryable=True)
+    if any(not isinstance(part, str) or len(part.encode("utf-8")) > limits["maxTextBytes"] for part in text_parts):
+        raise PersonalGroupCloudError("OverTree Cloud returned an oversized WeChat text part.", status_code=502, retryable=True)
+    for artifact in files:
+        if not isinstance(artifact, dict) or not artifact.get("url") or not artifact.get("name"):
+            raise PersonalGroupCloudError("OverTree Cloud returned invalid WeChat artifact metadata.", status_code=502, retryable=True)
+        if artifact.get("mediaType") not in {"image", "file"}:
+            raise PersonalGroupCloudError("OverTree Cloud returned an unsupported WeChat media type.", status_code=502, retryable=True)
+        maximum = artifact.get("maxBytes")
+        if not isinstance(maximum, int) or isinstance(maximum, bool) or maximum != limits["maxArtifactBytes"]:
+            raise PersonalGroupCloudError("OverTree Cloud returned an invalid WeChat artifact size limit.", status_code=502, retryable=True)
+        size = artifact.get("size")
+        if size is not None and (not isinstance(size, int) or isinstance(size, bool) or size < 0 or size > maximum):
+            raise PersonalGroupCloudError("OverTree Cloud returned an artifact larger than its delivery limit.", status_code=502, retryable=True)
+    return plan
+
+
 def stable_message_id(row: dict[str, Any]) -> str:
     shard = Path(str(row.get("_message_db") or "message_0.db")).name
     server_id = str(row.get("server_id") or "").strip()
@@ -260,7 +296,8 @@ def _send(send_text: Callable[..., Any], config: dict[str, Any], state: dict[str
 
 
 def _enqueue_outgoing(state: dict[str, Any], text: str, source: dict[str, Any], kind: str,
-                      *, message_id: str = "") -> str:
+                      *, message_id: str = "", artifact: dict[str, Any] | None = None,
+                      result_id: str = "") -> str:
     outbox = state.setdefault("personal_group_cloud_outbox", [])
     stable_id = message_id or hashlib.sha256(
         f"{kind}|{source.get('_message_db')}|{source.get('local_id')}|{text}".encode("utf-8")
@@ -270,6 +307,8 @@ def _enqueue_outgoing(state: dict[str, Any], text: str, source: dict[str, Any], 
             "id": stable_id,
             "text": text,
             "kind": kind,
+            **({"artifact": artifact} if artifact else {}),
+            **({"resultId": result_id} if result_id else {}),
             "sourceRow": {
                 "_message_db": str(source.get("_message_db") or ""),
                 "server_id": str(source.get("server_id") or ""),
@@ -311,6 +350,9 @@ def _download_artifact(config: dict[str, Any], artifact: dict[str, Any]) -> Path
         or (base.scheme, base.netloc.lower()) != (parsed.scheme, parsed.netloc.lower())
     ):
         raise PersonalGroupCloudError("Cloud artifact URL must use the explicitly configured HTTPS artifact origin.")
+    max_bytes = artifact.get("maxBytes")
+    if not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes <= 0:
+        raise PersonalGroupCloudError("Cloud artifact is missing its delivery size limit.")
     request = Request(url, headers={"Accept": "application/octet-stream", "User-Agent": "OverTree-LabCanvas/1"})
     filename = _artifact_path(artifact.get("name"))
     artifact_key = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
@@ -326,14 +368,14 @@ def _download_artifact(config: dict[str, Any], artifact: dict[str, Any]) -> Path
         opener = build_opener(RejectRedirect())
         with opener.open(request, timeout=30) as response, temporary.open("wb") as handle:
             length = int(response.headers.get("Content-Length") or 0)
-            if length > MAX_ARTIFACT_BYTES:
+            if length > max_bytes:
                 raise PersonalGroupCloudError("Cloud artifact exceeds the local delivery limit.")
             while True:
-                chunk = response.read(min(1024 * 1024, MAX_ARTIFACT_BYTES - total + 1))
+                chunk = response.read(min(1024 * 1024, max_bytes - total + 1))
                 if not chunk:
                     break
                 total += len(chunk)
-                if total > MAX_ARTIFACT_BYTES:
+                if total > max_bytes:
                     raise PersonalGroupCloudError("Cloud artifact exceeds the local delivery limit.")
                 handle.write(chunk)
         temporary.replace(destination)
@@ -803,41 +845,33 @@ def run_once(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str,
             item["nextPollAt"] = now + min(30, 2 ** min(attempts_count, 5))
             remaining.append(item)
             continue
-        if status in {"failed", "error", "stopped"}:
-            if status == "stopped":
-                result = "这次 OverTree 任务因服务重启或停止而中断，结果没有完成。你可以稍后在 OverTree 会话中继续。"
-            else:
-                result = "这次 OverTree 任务没有完成。请稍后重试，或打开 OverTree 查看任务状态。"
-        else:
-            result = str(receipt.get("result") or receipt.get("reply") or "OverTree 已完成处理，但没有返回可发送的文字摘要。请打开 OverTree 项目查看完整结果和文件。").strip()
-        # Keep artifact URLs private. The enterprise WeChat transports send the
-        # text summary first, then deliver each allowed artifact as native media.
-        outgoing = result or "OverTree 已完成处理，但没有返回可发送的文字摘要。请打开 OverTree 项目查看完整结果和文件。"
-        result_files = [
-            file for file in receipt.get("files", [])
-            if isinstance(file, dict) and file.get("url")
-        ][:MAX_RESULT_FILES]
+        plan = _validate_delivery_plan(receipt)
         source = item.get("sourceRow") if isinstance(item.get("sourceRow"), dict) else {}
-        item["result"] = outgoing
+        result_id = f"result-{item['messageId']}"
+        item["result"] = "\n".join(plan["textParts"])
         item["resultReady"] = True
         item["resultSource"] = source
-        _enqueue_outgoing(state, outgoing, source, "result", message_id=f"result-{item['messageId']}")
-        if send_file is not None:
-            for index, artifact in enumerate(result_files):
-                file_id = _enqueue_outgoing(
-                    state,
-                    f"文件：{str(artifact.get('name') or f'artifact-{index + 1}')}",
-                    source,
-                    "file",
-                    message_id=f"result-file-{item['messageId']}-{index}",
-                )
-                for queued in state.get("personal_group_cloud_outbox", []):
-                    if isinstance(queued, dict) and str(queued.get("id") or "") == file_id:
-                        queued["artifact"] = {
-                            "url": str(artifact.get("url") or ""),
-                            "name": str(artifact.get("name") or f"artifact-{index + 1}"),
-                        }
-                        break
+        item["deliveryPlanVersion"] = plan["version"]
+        for index, text in enumerate(plan["textParts"]):
+            text_id = result_id if index == 0 else f"{result_id}-text-{index}"
+            _enqueue_outgoing(
+                state,
+                text,
+                source,
+                "result",
+                message_id=text_id,
+                result_id=result_id,
+            )
+        for index, artifact in enumerate(plan["files"]):
+            _enqueue_outgoing(
+                state,
+                f"文件：{str(artifact.get('name') or f'artifact-{index + 1}')}",
+                source,
+                "file",
+                message_id=f"{result_id}-artifact-{index}",
+                artifact=artifact,
+                result_id=result_id,
+            )
         remaining.append(item)
         break
     state["personal_group_cloud_pending"] = remaining

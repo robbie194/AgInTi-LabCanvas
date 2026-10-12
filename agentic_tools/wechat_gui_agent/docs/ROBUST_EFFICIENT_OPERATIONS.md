@@ -100,6 +100,30 @@ the operator's personal WeChat account and is not an official Tencent bot API;
 do not promise zero account risk. See the
 [local Agent profile guide](../../../docs/WECHAT_PERSONAL_GROUP_LOCAL_PROFILE.md).
 
+Cloud owns the shared result-delivery policy used by both this adapter and the
+WeChat Customer Service Gateway. Consume the versioned Cloud `deliveryPlan`;
+do not locally choose formats, deduplicate variants, split result text, or
+raise its limits. Version 1 permits 1,800 UTF-8 bytes per text message, five
+result messages total, at most four media files, and at most 50 MiB per file.
+Cloud selects PNG/JPEG/GIF/WebP images and PDF/TXT/DOC/DOCX files, keeps the
+smaller supported file among same-directory same-name format variants, and
+adds a project-file-area notice for omitted files. Do not send artifact URLs as
+chat text. Validate the plan before enqueueing it; persist stable IDs for each
+text part and file in the group's private outbox. Download each file only from
+the explicitly configured HTTPS Cloud origin, enforce the plan's byte limit
+while streaming, pass it to the exact-title guarded GUI file sender, and remove
+the private temporary copy after the send attempt.
+
+Cloud's source now includes per-user group-name registration and a code scoped
+to its selected group slot. Once deployed, Cloud generates the exact group
+title; a customer-service operator still creates the regular WeChat group,
+adds the Agent and intended members, and applies that title manually. The
+customer selects the registered slot plus project/session in `/wechat` and
+sends its one-time code only into that group. The adapter claims it using the
+exact observed group identity. As of 2026-10-12, this registration feature and
+the shared delivery-plan changes are not deployed to production Cloud; the
+existing preconfigured OCR pilot remains the only live personal group.
+
 For OCR-only groups, synthetic visible-text rows have no native WeChat message
 database receipt. Route only `ingress=ocr_gui` text replies through the
 receipt-free visual sender: click the guarded chat's visible Send control using

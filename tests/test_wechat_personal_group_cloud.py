@@ -101,7 +101,7 @@ class PersonalGroupCloudTests(unittest.TestCase):
             "content": text,
         }
 
-    def run_once(self, client, rows, *, state=None, send_text=None):
+    def run_once(self, client, rows, *, state=None, send_text=None, send_file=None):
         bridge.PRIVATE.mkdir(parents=True, exist_ok=True)
         state_dir = tempfile.TemporaryDirectory(prefix="personal-group-test-", dir=bridge.PRIVATE)
         self.addCleanup(state_dir.cleanup)
@@ -113,6 +113,7 @@ class PersonalGroupCloudTests(unittest.TestCase):
             eligible=lambda row: row.get("sender") != "agent-wxid",
             visible_text=lambda row: row["content"],
             send_text=send_text or (lambda _config, _text: None),
+            send_file=send_file,
             client_factory=lambda _config: (client, "group-exact-1"),
         )
 
@@ -321,7 +322,16 @@ class PersonalGroupCloudTests(unittest.TestCase):
         self.assertIn("因空闲超时断开", sent[0])
 
     def test_terminal_result_is_delivered_and_pending_item_is_cleared(self):
-        client = FakeClient(receipt={"status": "finished", "result": "已完成", "files": [{"url": "https://cloud.example/result.pdf"}]})
+        client = FakeClient(receipt={
+            "status": "finished",
+            "result": "已完成",
+            "deliveryPlan": {
+                "version": 1,
+                "limits": {"maxTextBytes": 1800, "maxMessages": 5, "maxMediaFiles": 4, "maxArtifactBytes": 50 * 1024 * 1024},
+                "textParts": ["已完成"],
+                "files": [],
+            },
+        })
         state = {
             "personal_group_cloud_pending": [{
                 "messageId": "message_4.db:server-7:7",
@@ -337,6 +347,74 @@ class PersonalGroupCloudTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["pending"], 0)
         self.assertEqual(result["metrics"]["outbox"], 0)
 
+    def test_terminal_result_queues_cloud_text_parts_and_media_without_local_policy(self):
+        artifact = {
+            "name": "chart.png",
+            "path": "output/chart.png",
+            "size": 1200,
+            "url": "https://cloud.example/wechat/files/token",
+            "mediaType": "image",
+            "maxBytes": 50 * 1024 * 1024,
+        }
+        client = FakeClient(receipt={
+            "status": "finished",
+            "result": "原始结果忽略，本地必须消费 Cloud 计划",
+            "deliveryPlan": {
+                "version": 1,
+                "limits": {"maxTextBytes": 1800, "maxMessages": 5, "maxMediaFiles": 4, "maxArtifactBytes": 50 * 1024 * 1024},
+                "textParts": ["Cloud 第一段", "Cloud 第二段"],
+                "files": [artifact],
+            },
+        })
+        state = {
+            "personal_group_cloud_pending": [{
+                "messageId": "message_4.db:server-8:8",
+                "submitted": True,
+                "sourceRow": {"_message_db": "message_4.db", "local_id": 8, "server_id": "server-8"},
+            }]
+        }
+        sent_text = []
+        sent_files = []
+
+        with tempfile.TemporaryDirectory() as directory:
+            downloaded = Path(directory) / "chart.png"
+            downloaded.write_bytes(b"png")
+            with mock.patch.object(bridge, "_download_artifact", return_value=downloaded):
+                self.run_once(client, [], state=state, send_text=lambda _config, text: sent_text.append(text),
+                              send_file=lambda _config, file_path: sent_files.append(file_path.name))
+                self.assertEqual(sent_text, ["Cloud 第一段"])
+                self.assertEqual(len(state["personal_group_cloud_outbox"]), 2)
+                self.assertEqual(state["personal_group_cloud_outbox"][1]["artifact"], artifact)
+
+                self.run_once(client, [], state=state, send_text=lambda _config, text: sent_text.append(text),
+                              send_file=lambda _config, file_path: sent_files.append(file_path.name))
+                self.run_once(client, [], state=state, send_text=lambda _config, text: sent_text.append(text),
+                              send_file=lambda _config, file_path: sent_files.append(file_path.name))
+        self.assertEqual(sent_text, ["Cloud 第一段", "Cloud 第二段"])
+        self.assertEqual(sent_files, ["chart.png"])
+        self.assertEqual(state["personal_group_cloud_outbox"], [])
+        self.assertNotIn("https://cloud.example", " ".join(sent_text))
+
+    def test_personal_group_rejects_an_unknown_delivery_plan_version(self):
+        with self.assertRaisesRegex(bridge.PersonalGroupCloudError, "unsupported WeChat delivery plan"):
+            bridge._validate_delivery_plan({"deliveryPlan": {"version": 2}})
+
+    def test_personal_group_rejects_delivery_limits_outside_the_shared_v1_contract(self):
+        plan = {
+            "version": 1,
+            "limits": {
+                "maxTextBytes": 1800,
+                "maxMessages": 5,
+                "maxMediaFiles": 4,
+                "maxArtifactBytes": 50 * 1024 * 1024,
+            },
+            "textParts": ["完成"],
+            "files": [],
+        }
+        for key, value in (("maxMessages", 6), ("maxMediaFiles", 5), ("maxArtifactBytes", 100 * 1024 * 1024)):
+            with self.subTest(limit=key), self.assertRaisesRegex(bridge.PersonalGroupCloudError, "unsupported WeChat delivery limits"):
+                bridge._validate_delivery_plan({"deliveryPlan": {**plan, "limits": {**plan["limits"], key: value}}})
+
     def test_new_cloud_task_sends_the_same_processing_ack_as_enterprise_group(self):
         client = FakeClient()
         row = self.row(20, "customer-wxid", "@OverTree 请分析这份资料")
@@ -349,12 +427,12 @@ class PersonalGroupCloudTests(unittest.TestCase):
         with self.assertRaises(bridge.PersonalGroupCloudError):
             bridge._download_artifact(
                 {"personal_group_cloud": {}},
-                {"url": "https://files.example/result.pdf", "name": "result.pdf"},
+                {"url": "https://files.example/result.pdf", "name": "result.pdf", "maxBytes": 50 * 1024 * 1024},
             )
         with self.assertRaises(bridge.PersonalGroupCloudError):
             bridge._download_artifact(
                 {"personal_group_cloud": {"artifact_base_url": "https://cloud.example"}},
-                {"url": "https://other.example/result.pdf", "name": "result.pdf"},
+                {"url": "https://other.example/result.pdf", "name": "result.pdf", "maxBytes": 50 * 1024 * 1024},
             )
 
     def test_cloud_artifact_redirect_is_rejected_and_partial_file_removed(self):
@@ -374,7 +452,34 @@ class PersonalGroupCloudTests(unittest.TestCase):
             with self.assertRaisesRegex(bridge.PersonalGroupCloudError, "redirects are not accepted"):
                 bridge._download_artifact(
                     {"personal_group_cloud": {"artifact_base_url": "https://cloud.example"}},
-                    {"url": "https://cloud.example/wechat/files/token", "name": "result.pdf"},
+                    {"url": "https://cloud.example/wechat/files/token", "name": "result.pdf", "maxBytes": 50 * 1024 * 1024},
+                )
+            self.assertEqual(list(Path(directory).rglob("*.partial")), [])
+
+    def test_cloud_artifact_download_obeys_the_limit_from_the_delivery_plan(self):
+        class LargeResponse:
+            headers = {"Content-Length": "4"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        class FixedOpener:
+            def open(self, _request, timeout):
+                return LargeResponse()
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(bridge, "PRIVATE", Path(directory)), \
+                mock.patch.object(bridge, "build_opener", return_value=FixedOpener()):
+            with self.assertRaisesRegex(bridge.PersonalGroupCloudError, "exceeds the local delivery limit"):
+                bridge._download_artifact(
+                    {"personal_group_cloud": {"artifact_base_url": "https://cloud.example"}},
+                    {
+                        "url": "https://cloud.example/wechat/files/token",
+                        "name": "result.pdf",
+                        "maxBytes": 3,
+                    },
                 )
             self.assertEqual(list(Path(directory).rglob("*.partial")), [])
 
@@ -382,7 +487,7 @@ class PersonalGroupCloudTests(unittest.TestCase):
         state = {"personal_group_cloud_outbox": [{
             "id": "artifact-1",
             "kind": "file",
-            "artifact": {"url": "https://cloud.example/wechat/files/token", "name": "result.pdf"},
+            "artifact": {"url": "https://cloud.example/wechat/files/token", "name": "result.pdf", "maxBytes": 50 * 1024 * 1024},
             "sourceRow": {},
         }]}
         sent = []

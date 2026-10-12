@@ -64,17 +64,44 @@ local Agent only when that group's private config explicitly enables
 configured Agent name enter the Cloud session; every group member can do this,
 and ordinary human group chat stays in WeChat. Cloud records who spoke by their
 WeChat display name without assigning different customer/support permissions.
-In the current pilot, send the one-time code into an already-registered group to bind it;
-sending a fresh code in that same group switches only that group's project and
-session. New bindings disconnect after 24 hours without a Cloud conversation by
-default, with 3-day, 7-day, and never-expire choices in Cloud.
+In the current production pilot, send the one-time code into its preconfigured
+group to bind it; sending a fresh code in that same group switches only that
+group's project and session. New bindings disconnect after 24 hours without a
+Cloud conversation by default, with 3-day, 7-day, and never-expire choices in
+Cloud.
 
 The isolated `OvertreeAI 测试` OCR pilot is active and bound to its selected
 Cloud project/session. Its binding confirmation was verified in the group on
 2026-10-12 after fixing OCR-only text delivery. Other group configs stay
 disabled by default. The Cloud group-registration UI/API is implemented in the
-source tree but is not deployed to the live Cloud service yet, so only the
-preconfigured pilot group is currently available. The adapter calls Cloud's separate HMAC-signed
+source tree but is not deployed to the live Cloud service yet. Production Cloud
+is still at `10129d9` and its database lacks the group-registration table, so
+new users cannot yet register a group themselves; only the preconfigured pilot
+group is currently available.
+
+After Cloud deploys that feature and its database migration, the customer signs
+in at `/wechat` and asks Cloud to generate a unique name such as
+`OverTree-G-7K4Q2M`. A customer-service operator creates the ordinary WeChat
+group, adds the Agent account and the intended members, then gives the group the
+exact generated name. The customer returns to `/wechat`, chooses that registered
+group plus a project, session, and idle timeout, and generates a one-time code.
+They send the code only in the named group. The local LabCanvas adapter checks
+the exact group identity and claims the code; Cloud binds that group to the
+selected project and session. Cloud does not create the WeChat group or invite
+people. Later, a new code sent in that same group switches only its binding.
+
+Result files use a single Cloud delivery plan shared with the Customer Service
+Gateway: text parts are at most 1,800 UTF-8 bytes, the result uses at most five
+messages total including up to four media files, and each file is at most
+50 MiB. The plan chooses the smaller supported format for same-directory,
+same-name variants and allows PNG/JPEG/GIF/WebP images plus PDF/TXT/Word files.
+It leaves other files in the OverTree project file area and never sends a
+download URL to the group. The personal-group adapter downloads selected files
+to a private temporary path and hands them to the existing exact-title guarded
+GUI sender. These shared-plan changes are in source but are not deployed to
+production yet.
+
+The adapter calls Cloud's separate HMAC-signed
 `/internal/wechat/personal-groups/v1/*` routes over a private VPN or SSH tunnel;
 never expose `/internal/*` on the public reverse proxy. LabCanvas polls Cloud
 and sends replies through the local Agent-WeChat GUI, so the first version does
@@ -101,8 +128,9 @@ with a one-shot `wechat_ocr_group_ingress.py --once --send`, then use
 `WECHAT_OCR_GROUP_ENABLED`; omit it to keep preparation disabled.) It reads only the
 newest visible line containing `@OverTree` or an eight-character binding code,
 deduplicates that line for a configurable cooldown, and does not read the
-WeChat database or process memory. Inbound media is deferred; Cloud result
-files still use the existing guarded GUI delivery path. OCR replies use the
+WeChat database or process memory. Inbound media is deferred. Result files use
+the shared Cloud plan and the existing guarded GUI delivery path once the
+pending Cloud/Gateway/LabCanvas changes are deployed. OCR replies use the
 visible Send control in X desktop coordinates and verify that the composer
 clears; noVNC browser scaling does not change those coordinates. See
 [the OCR setup](docs/WECHAT_PERSONAL_GROUP_CLOUD.md#guiocr-group-ingress).
