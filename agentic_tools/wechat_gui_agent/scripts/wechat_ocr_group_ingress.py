@@ -38,10 +38,19 @@ PRIVATE = Path(os.environ.get(
     str(ROOT / "agentic_tools" / "wechat_gui_agent" / ".private"),
 )).expanduser().resolve()
 DEFAULT_STATE = PRIVATE / "wechat-ocr-group-ingress.state.json"
+PASSIVE_STATE_PREFIX = "wechat-ocr-passive"
 GUI_LOCK = PRIVATE / "wechat_gui_send.lock"
 CODE_RE = re.compile(r"(?<![A-Za-z0-9])[A-HJ-NP-Z2-9]{8}(?![A-Za-z0-9])", re.IGNORECASE)
 GROUP_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.IGNORECASE)
 GROUP_TITLE_RE = re.compile(r"^OverTree-G-[A-HJ-NP-Z2-9]{6}$")
+COPY_MENU_LABELS = {"复制", "複製", "copy", "copymessage", "copytext"}
+CONTEXT_MENU_LABELS = {
+    "转发", "轉發", "forward", "收藏", "favorite", "多选", "多選",
+    "引用", "quote", "删除", "刪除", "delete", "撤回", "recall",
+    "搜一搜", "search", "翻译", "翻譯", "translate", "编辑", "編輯", "edit",
+}
+PASSIVE_SIGNATURE_SIZE = (96, 64)
+COPY_MENU_SCALE = 2.5
 _REMOTE_GROUP_CACHE: dict[str, Any] = {"fetched_at": 0.0, "configs": [], "error": ""}
 
 
@@ -50,6 +59,12 @@ def main() -> int:
     parser.add_argument("--configs", default=os.environ.get("WECHAT_OCR_GROUP_CONFIGS", ""))
     parser.add_argument("--display", default=os.environ.get("WECHAT_DISPLAY", ":97"))
     parser.add_argument("--interval", type=float, default=float(os.environ.get("WECHAT_OCR_GROUP_INTERVAL", "3")))
+    parser.add_argument(
+        "--active-rescan-seconds",
+        type=float,
+        default=float(os.environ.get("WECHAT_OCR_GROUP_ACTIVE_RESCAN_SECONDS", "180")),
+        help="Run an allowlisted chat scan after this many seconds even when the screen signature is unchanged.",
+    )
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--require-unread-badge", action="store_true", help="Only open rows with a visible red unread marker.")
@@ -86,13 +101,14 @@ def discover_configs(raw: str) -> list[Path]:
 
 
 def scan_once(args: argparse.Namespace, configs: list[Path]) -> list[dict[str, Any]]:
-    results = []
+    results: list[dict[str, Any]] = []
     local_group_ids: set[str] = set()
+    prepared: list[tuple[dict[str, Any], Path]] = []
     for path in configs:
         try:
             config = json.loads(path.read_text(encoding="utf-8"))
             local_group_ids.add(str(config.get("chatroom_id") or ""))
-            results.append(scan_group(args, config, path))
+            prepared.append((config, path))
         except Exception as exc:
             results.append({"ok": False, "config": str(path), "error": f"{type(exc).__name__}: {str(exc)[:500]}"})
     if remote_group_sync_enabled():
@@ -107,10 +123,177 @@ def scan_once(args: argparse.Namespace, configs: list[Path]) -> list[dict[str, A
                 continue
             path = PRIVATE / f"{group_id}-registered-group.json"
             try:
-                results.append(scan_group(args, config, path))
+                prepared.append((config, path))
             except Exception as exc:
                 results.append({"ok": False, "config": str(path), "error": f"{type(exc).__name__}: {str(exc)[:500]}"})
+
+    if not prepared:
+        return results
+
+    by_display: dict[str, list[tuple[dict[str, Any], Path]]] = {}
+    for config, path in prepared:
+        display = str(config.get("display") or args.display)
+        by_display.setdefault(display, []).append((config, path))
+    for display, display_configs in by_display.items():
+        results.extend(scan_display_groups(args, display, display_configs))
     return results
+
+
+def scan_display_groups(
+    args: argparse.Namespace,
+    display: str,
+    prepared: list[tuple[dict[str, Any], Path]],
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    monitor_path = passive_state_path(display)
+    ensure_private_path(monitor_path)
+    monitor_state = load_state(monitor_path)
+    group_key = configured_group_key(prepared)
+    try:
+        observation = observe_passive_screen(display)
+    except Exception as exc:
+        observation = None
+        results.append({
+            "ok": False,
+            "display": display,
+            "monitor": "passive_screen",
+            "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+        })
+    now = time.time()
+    active_scan = False
+    scan_reason = "window_unavailable"
+    if observation:
+        active_scan, scan_reason = active_scan_decision(
+            monitor_state,
+            observation["signature"],
+            group_key,
+            now=now,
+            rescan_seconds=max(30.0, min(3600.0, float(args.active_rescan_seconds))),
+        )
+
+    for config, path in prepared:
+        try:
+            result = scan_group(
+                args,
+                config,
+                path,
+                scan_gui=active_scan,
+                seed_only=scan_reason in {"initial_baseline", "allowlist_changed"},
+            )
+            if not active_scan and observation:
+                result["scan_skipped"] = "screen_unchanged"
+            elif active_scan:
+                result["scan_reason"] = scan_reason
+            results.append(result)
+        except Exception as exc:
+            results.append({"ok": False, "config": str(path), "error": f"{type(exc).__name__}: {str(exc)[:500]}"})
+
+    if observation:
+        # Active group navigation changes the visible screen itself. Store a
+        # post-scan baseline so those deliberate GUI operations do not trigger
+        # another full pass on the next interval. The bounded rescan below
+        # remains the recovery path for an event that races this baseline.
+        if active_scan:
+            try:
+                final_observation = observe_passive_screen(display)
+            except Exception:
+                final_observation = None
+            monitor_state["screen_signature"] = (
+                final_observation["signature"] if final_observation else observation["signature"]
+            )
+            monitor_state["last_active_scan_at"] = now
+            monitor_state["last_active_scan_reason"] = scan_reason
+        else:
+            monitor_state["screen_signature"] = observation["signature"]
+        monitor_state["group_key"] = group_key
+        monitor_state["last_observed_at"] = int(now)
+        save_state(monitor_path, monitor_state)
+    return results
+
+
+def passive_state_path(display: str) -> Path:
+    key = hashlib.sha256(str(display).encode("utf-8")).hexdigest()[:12]
+    return PRIVATE / f"{PASSIVE_STATE_PREFIX}-{key}.json"
+
+
+def configured_group_key(prepared: list[tuple[dict[str, Any], Path]]) -> str:
+    identities = sorted(
+        f"{str(config.get('chatroom_id') or '')}|{str(config.get('chat_name') or '')}"
+        for config, _path in prepared
+    )
+    return hashlib.sha256("\n".join(identities).encode("utf-8")).hexdigest()
+
+
+def active_scan_decision(
+    state: dict[str, Any],
+    signature: str,
+    group_key: str,
+    *,
+    now: float,
+    rescan_seconds: float,
+) -> tuple[bool, str]:
+    previous = str(state.get("screen_signature") or "")
+    if not previous:
+        return True, "initial_baseline"
+    if str(state.get("group_key") or "") != group_key:
+        return True, "allowlist_changed"
+    if previous != signature:
+        return True, "screen_changed"
+    try:
+        last_scan = float(state.get("last_active_scan_at") or 0)
+    except (TypeError, ValueError):
+        last_scan = 0
+    if last_scan <= 0 or now - last_scan >= max(30.0, rescan_seconds):
+        return True, "safety_rescan_due"
+    return False, "screen_unchanged"
+
+
+def observe_passive_screen(display: str) -> dict[str, Any] | None:
+    """Take a low-cost local screenshot sample without OCR or input events."""
+    env = os.environ.copy()
+    env["DISPLAY"] = str(display)
+    env["WECHAT_DISPLAY"] = str(display)
+    window = gui.wait_for_main_wechat_window(env, timeout=1)
+    if not window or window.width < 500 or window.height < 500:
+        return None
+    with GUI_LOCK.open("a", encoding="utf-8") as lock:
+        acquire_lock(lock, 15)
+        with tempfile.TemporaryDirectory(prefix="wechat-passive-") as temporary:
+            screenshot = Path(temporary) / "screen.png"
+            gui.screenshot(env, screenshot)
+            signature = passive_screen_signature(env, screenshot, window)
+    return {"signature": signature, "window": window}
+
+
+def passive_screen_signature(env: dict[str, str], screenshot: Path, window: gui.Window) -> str:
+    """Hash a quantized crop containing chat rows and the live conversation tail."""
+    left = max(0, window.x + int(window.width * 0.05))
+    top = max(0, window.y + int(window.height * 0.08))
+    width = max(1, int(window.width * 0.81))
+    height = max(1, int(window.height * 0.66))
+    geometry = f"{width}x{height}+{left}+{top}"
+    command = [
+        "convert", str(screenshot), "-crop", geometry, "+repage",
+        "-alpha", "off", "-colorspace", "Gray",
+        "-resize", f"{PASSIVE_SIGNATURE_SIZE[0]}x{PASSIVE_SIGNATURE_SIZE[1]}!",
+        "-depth", "8", "gray:-",
+    ]
+    try:
+        result = subprocess.run(command, env=env, capture_output=True, check=False, timeout=15)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError("could not compute the passive WeChat screen signature") from exc
+    expected = PASSIVE_SIGNATURE_SIZE[0] * PASSIVE_SIGNATURE_SIZE[1]
+    if result.returncode != 0 or len(result.stdout) != expected:
+        raise RuntimeError("ImageMagick returned an invalid passive WeChat screen sample")
+    return quantized_pixel_signature(result.stdout)
+
+
+def quantized_pixel_signature(pixels: bytes) -> str:
+    expected = PASSIVE_SIGNATURE_SIZE[0] * PASSIVE_SIGNATURE_SIZE[1]
+    if len(pixels) != expected:
+        raise ValueError(f"expected {expected} grayscale pixels, received {len(pixels)}")
+    quantized = bytes((value // 16) * 16 for value in pixels)
+    return hashlib.sha256(quantized).hexdigest()
 
 
 def remote_group_sync_enabled() -> bool:
@@ -183,7 +366,14 @@ def registered_group_configs(*, force_refresh: bool = False) -> list[dict[str, A
         raise
 
 
-def scan_group(args: argparse.Namespace, config: dict[str, Any], config_path: Path) -> dict[str, Any]:
+def scan_group(
+    args: argparse.Namespace,
+    config: dict[str, Any],
+    config_path: Path,
+    *,
+    scan_gui: bool = True,
+    seed_only: bool = False,
+) -> dict[str, Any]:
     chat_name = str(config.get("chat_name") or "").strip()
     if not chat_name:
         raise PersonalGroupCloudError("OCR group config requires chat_name.")
@@ -195,53 +385,66 @@ def scan_group(args: argparse.Namespace, config: dict[str, Any], config_path: Pa
     config["_runtime_state_path"] = str(state_path)
     target = target_from_config(config, chat_name)
     extracted: str | None = None
+    extraction_method = "not_scanned"
     opened = False
-    with tempfile.TemporaryDirectory(prefix="wechat-ocr-") as temp:
-        evidence = Path(temp)
-        env = os.environ.copy()
-        env["DISPLAY"] = str(config.get("display") or args.display)
-        env["WECHAT_DISPLAY"] = env["DISPLAY"]
-        gui.require_tools("xdotool", "import", "convert", "tesseract")
-        window = gui.wait_for_main_wechat_window(env, timeout=10)
-        if not window or window.width < 500 or window.height < 500:
-            raise RuntimeError("WECHAT_ENTRY_REQUIRED: the Agent WeChat window is not ready")
-        if args.require_unread_badge and not has_unread_badge(env, window, target, evidence):
-            return {"ok": True, "chat": chat_name, "skipped": "no_unread_badge"}
-        # Serialize navigation with every other GUI sender. Cloud polling is
-        # outside this lock; the adapter reopens the exact guarded target.
-        with GUI_LOCK.open("a", encoding="utf-8") as lock:
-            acquire_lock(lock, 15)
-            original_title_regions = gui.title_crop_regions
-            gui.title_crop_regions = ocr_title_crop_regions
-            try:
-                opened_result = gui.open_target(
-                    env, window, target, pause=float(config.get("open_pause_seconds") or 0.6),
-                    out_dir=evidence, shot_prefix="ocr-open", skip_title_guard=False,
-                    prefer_current=True, allow_search=False, fail_closed_after_visible_match=True,
-                )
-            finally:
-                gui.title_crop_regions = original_title_regions
-            if not opened_result.get("ok"):
-                return {
-                    "ok": False, "chat": chat_name, "status": "title_guard_failed",
-                    "method": opened_result.get("method"), "window_title": opened_result.get("window_title"),
-                }
-            opened = True
-            extracted = ocr_triggered_text(env, window, config, evidence)
-        rows = []
+    rows: list[dict[str, Any]] = []
+    fingerprint = ""
+    seeded = False
+    if scan_gui:
+        with tempfile.TemporaryDirectory(prefix="wechat-ocr-") as temp:
+            evidence = Path(temp)
+            env = os.environ.copy()
+            env["DISPLAY"] = str(config.get("display") or args.display)
+            env["WECHAT_DISPLAY"] = env["DISPLAY"]
+            gui.require_tools("xdotool", "import", "convert", "tesseract", "xclip")
+            window = gui.wait_for_main_wechat_window(env, timeout=10)
+            if not window or window.width < 500 or window.height < 500:
+                raise RuntimeError("WECHAT_ENTRY_REQUIRED: the Agent WeChat window is not ready")
+            unread_gate_passed = not args.require_unread_badge or has_unread_badge(env, window, target, evidence)
+            if unread_gate_passed:
+                # Serialize navigation, bubble Copy, and clipboard access with every
+                # other GUI sender on this isolated WeChat desktop.
+                with GUI_LOCK.open("a", encoding="utf-8") as lock:
+                    acquire_lock(lock, 15)
+                    original_title_regions = gui.title_crop_regions
+                    gui.title_crop_regions = ocr_title_crop_regions
+                    try:
+                        opened_result = gui.open_target(
+                            env, window, target, pause=float(config.get("open_pause_seconds") or 0.6),
+                            out_dir=evidence, shot_prefix="ocr-open", skip_title_guard=False,
+                            prefer_current=True, allow_search=False, fail_closed_after_visible_match=True,
+                        )
+                    finally:
+                        gui.title_crop_regions = original_title_regions
+                    if not opened_result.get("ok"):
+                        return {
+                            "ok": False, "chat": chat_name, "status": "title_guard_failed",
+                            "method": opened_result.get("method"), "window_title": opened_result.get("window_title"),
+                        }
+                    opened = True
+                    extraction = ocr_triggered_message(env, window, config, evidence)
+                    extracted = str(extraction.get("text") or "")
+                    extraction_method = str(extraction.get("method") or "none")
+            else:
+                extraction_method = "no_unread_badge"
         if extracted:
             row, fingerprint = build_ocr_row(config, state, extracted)
             if not ocr_fingerprint_is_recent(state, fingerprint, extracted):
-                rows.append(row)
-        result = run_cloud_once(
-            config, state, rows, send=True,
-            eligible=lambda _row: True,
-            inbound=lambda _row: True,
-            visible_text=lambda row: str(row.get("content") or ""),
-            send_text=send_gui_message,
-            send_file=send_gui_file,
-        )
-    if extracted and rows:
+                if seed_only and extraction_method != "ocr_binding_code":
+                    # A process restart or newly added group must establish a
+                    # visible-message baseline without replaying old questions.
+                    seeded = True
+                else:
+                    rows.append(row)
+    result = run_cloud_once(
+        config, state, rows, send=True,
+        eligible=lambda _row: True,
+        inbound=lambda _row: True,
+        visible_text=lambda row: str(row.get("content") or ""),
+        send_text=send_gui_message,
+        send_file=send_gui_file,
+    )
+    if extracted and (rows or seeded):
         state.setdefault("ocr_seen_fingerprints", []).append(fingerprint)
         state["ocr_seen_fingerprints"] = state["ocr_seen_fingerprints"][-200:]
         times = state.setdefault("ocr_fingerprint_times", {})
@@ -259,6 +462,8 @@ def scan_group(args: argparse.Namespace, config: dict[str, Any], config_path: Pa
         "chat": chat_name,
         "opened": opened,
         "text_detected": bool(extracted),
+        "extraction_method": extraction_method,
+        "seeded": seeded,
         "submitted": bool(result.get("task_enqueued")),
         "response_sent": bool(result.get("response_sent")),
         "metrics": result.get("metrics") or {},
@@ -314,6 +519,15 @@ def ocr_title_crop_regions(window: gui.Window) -> list[dict[str, int | str]]:
 
 
 def ocr_triggered_text(env: dict[str, str], window: gui.Window, config: dict[str, Any], evidence: Path) -> str:
+    return str(ocr_triggered_message(env, window, config, evidence).get("text") or "")
+
+
+def ocr_triggered_message(
+    env: dict[str, str],
+    window: gui.Window,
+    config: dict[str, Any],
+    evidence: Path,
+) -> dict[str, str]:
     region = chat_region(window, config)
     source = evidence / "screen.png"
     crop = evidence / "chat.png"
@@ -331,17 +545,31 @@ def ocr_triggered_text(env: dict[str, str], window: gui.Window, config: dict[str
     for line in reversed(lines):
         text = line["text"]
         if any(prefix.casefold() in text.casefold() for prefix in prefixes):
-            return normalize_message_text(text)[:30_000]
+            copied = ""
+            point = ocr_line_screen_point(line, region, scale=1.6)
+            copy_enabled = str(os.environ.get("WECHAT_OCR_GROUP_NATIVE_COPY", "true")).lower() != "false"
+            if point and copy_enabled:
+                copied = copy_text_bubble(env, window, *point, evidence=evidence)
+            if copied and any(prefix.casefold() in copied.casefold() for prefix in prefixes):
+                return {"text": normalize_message_text(copied)[:30_000], "method": "native_copy"}
+            return {"text": normalize_message_text(text)[:30_000], "method": "ocr_fallback"}
         match = CODE_RE.fullmatch(text.strip())
         if match:
-            return match.group(0).upper()
-    return ""
+            return {"text": match.group(0).upper(), "method": "ocr_binding_code"}
+    return {"text": "", "method": "none"}
 
 
-def parse_ocr_lines(tsv: str) -> list[dict[str, Any]]:
+def parse_ocr_lines(
+    tsv: str,
+    *,
+    scale: float = 1.0,
+    offset: tuple[int, int] = (0, 0),
+) -> list[dict[str, Any]]:
     import csv
     from io import StringIO
 
+    if scale <= 0:
+        raise ValueError("OCR coordinate scale must be positive")
     groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for raw in csv.DictReader(StringIO(tsv), delimiter="\t"):
         text = str(raw.get("text") or "").strip()
@@ -352,12 +580,223 @@ def parse_ocr_lines(tsv: str) -> list[dict[str, Any]]:
         except ValueError:
             continue
         key = (str(raw.get("block_num") or ""), str(raw.get("par_num") or ""), str(raw.get("line_num") or ""))
-        groups.setdefault(key, []).append({"text": text, "left": left, "top": top})
+        try:
+            width = int(raw.get("width") or 0)
+            height = int(raw.get("height") or 0)
+        except ValueError:
+            width, height = 0, 0
+        screen_left = offset[0] + round(left / scale)
+        screen_top = offset[1] + round(top / scale)
+        screen_right = offset[0] + round((left + width) / scale)
+        screen_bottom = offset[1] + round((top + height) / scale)
+        groups.setdefault(key, []).append({
+            "text": text,
+            "left": screen_left,
+            "top": screen_top,
+            "right": screen_right,
+            "bottom": screen_bottom,
+        })
     lines = []
     for words in groups.values():
         words.sort(key=lambda item: item["left"])
-        lines.append({"text": " ".join(item["text"] for item in words), "top": min(item["top"] for item in words)})
+        lines.append({
+            "text": " ".join(item["text"] for item in words),
+            "left": min(item["left"] for item in words),
+            "top": min(item["top"] for item in words),
+            "right": max(item["right"] for item in words),
+            "bottom": max(item["bottom"] for item in words),
+        })
     return sorted(lines, key=lambda item: item["top"])
+
+
+def ocr_line_screen_point(
+    line: dict[str, Any],
+    region: dict[str, int],
+    *,
+    scale: float,
+) -> tuple[int, int] | None:
+    try:
+        left = int(line["left"])
+        top = int(line["top"])
+        right = int(line["right"])
+        bottom = int(line["bottom"])
+        if right <= left or bottom <= top or scale <= 0:
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+    return (
+        region["left"] + round(((left + right) / 2) / scale),
+        region["top"] + round(((top + bottom) / 2) / scale),
+    )
+
+
+def copy_text_bubble(
+    env: dict[str, str],
+    window: gui.Window,
+    x: int,
+    y: int,
+    *,
+    evidence: Path,
+) -> str:
+    """Use the visible WeChat bubble's native Copy menu; OCR only locates it."""
+    sentinel = f"__OVERTREE_WECHAT_COPY_{os.getpid()}_{time.time_ns()}__"
+    owner: subprocess.Popen[str] | None = None
+    menu_open = False
+    try:
+        owner = start_clipboard_probe(env, sentinel)
+        gui.run(["xdotool", "mousemove", str(x), str(y), "click", "3"], env=env)
+        menu_open = True
+        time.sleep(0.20)
+        menu_screenshot = evidence / "copy-menu.png"
+        gui.screenshot(env, menu_screenshot)
+        display_size = gui.run(["xdotool", "getdisplaygeometry"], env=env).stdout.split()
+        if len(display_size) != 2:
+            return ""
+        screen_width, screen_height = (int(value) for value in display_size)
+        crop_left = max(0, x - 300)
+        crop_top = max(0, y - 220)
+        crop_width = min(700, screen_width - crop_left)
+        crop_height = min(600, screen_height - crop_top)
+        if crop_width < 180 or crop_height < 140:
+            return ""
+        menu_crop = evidence / "copy-menu-crop.png"
+        geometry = f"{crop_width}x{crop_height}+{crop_left}+{crop_top}"
+        run_command(
+            ["convert", str(menu_screenshot), "-crop", geometry, "+repage", "-resize", f"{COPY_MENU_SCALE * 100:g}%", str(menu_crop)],
+            env,
+        )
+        tsv = run_command(
+            ["tesseract", str(menu_crop), "stdout", "-l", "chi_sim+chi_tra+eng", "--psm", "11", "tsv"],
+            env,
+            check=False,
+        ).stdout
+        menu_lines = parse_ocr_lines(tsv, scale=COPY_MENU_SCALE, offset=(crop_left, crop_top))
+        action = find_copy_menu_action(menu_lines, x, y)
+        if action is None:
+            return ""
+        gui.click(env, action[0], action[1])
+        menu_open = False
+        copied = wait_for_clipboard_text(env, sentinel, timeout=1.5)
+        if not copied or copied.strip() == sentinel:
+            return ""
+        return copied[:30_000]
+    except Exception:
+        return ""
+    finally:
+        # Escape closes a still-open native menu if OCR or clipboard validation
+        # failed. It does not alter the draft or activate another conversation.
+        if menu_open:
+            gui.run(["xdotool", "key", "Escape"], env=env, check=False)
+        stop_clipboard_probe(owner)
+
+
+def start_clipboard_probe(env: dict[str, str], sentinel: str) -> subprocess.Popen[str]:
+    process = subprocess.Popen(
+        ["xclip", "-selection", "clipboard", "-quiet"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        env=env,
+    )
+    try:
+        assert process.stdin is not None
+        process.stdin.write(sentinel)
+        process.stdin.close()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if read_x_clipboard(env) == sentinel:
+                return process
+            if process.poll() is not None:
+                break
+            time.sleep(0.05)
+    except Exception:
+        stop_clipboard_probe(process)
+        raise
+    stop_clipboard_probe(process)
+    raise RuntimeError("WECHAT_COPY_CLIPBOARD_UNAVAILABLE: sentinel did not reach X clipboard")
+
+
+def stop_clipboard_probe(process: subprocess.Popen[str] | None) -> None:
+    if process is None or process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=1)
+
+
+def read_x_clipboard(env: dict[str, str]) -> str:
+    result = subprocess.run(
+        ["xclip", "-selection", "clipboard", "-o"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=3,
+    )
+    return result.stdout if result.returncode == 0 else ""
+
+
+def wait_for_clipboard_text(env: dict[str, str], sentinel: str, *, timeout: float) -> str:
+    """Wait briefly for the native menu action to replace our fresh clipboard marker."""
+    deadline = time.monotonic() + max(0.0, timeout)
+    while True:
+        copied = read_x_clipboard(env)
+        if copied and copied.strip() != sentinel:
+            return copied
+        if time.monotonic() >= deadline:
+            return ""
+        time.sleep(0.05)
+
+
+def find_copy_menu_action(
+    lines: list[dict[str, Any]],
+    anchor_x: int,
+    anchor_y: int,
+) -> tuple[int, int] | None:
+    normalized_lines: list[tuple[str, int, int, int, int]] = []
+    for line in lines:
+        text = re.sub(r"[\s:：.·()（）\[\]【】]", "", str(line.get("text") or "")).casefold()
+        try:
+            left, top = int(line["left"]), int(line["top"])
+            right, bottom = int(line["right"]), int(line["bottom"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        normalized_lines.append((text, left, top, right, bottom))
+
+    candidates: list[tuple[int, int, int]] = []
+    for text, left, top, right, bottom in normalized_lines:
+        if text not in COPY_MENU_LABELS and text not in {"copyc", "复制c", "複製c"}:
+            continue
+        center_x, center_y = (left + right) // 2, (top + bottom) // 2
+        dx, dy = center_x - anchor_x, center_y - anchor_y
+        # A native context menu opens beside the right-click point. Keep the
+        # search bounded so a matching word in nearby chat history cannot be
+        # mistaken for the menu command.
+        if abs(dx) > 300 or dy < -340 or dy > 420:
+            continue
+        # Require one neighboring, exact menu-action label as corroboration.
+        # If OCR cannot read enough of the menu, use the normal OCR fallback
+        # instead of clicking an ambiguous occurrence in the chat body.
+        corroborated = False
+        for other_text, other_left, other_top, other_right, other_bottom in normalized_lines:
+            if other_text not in CONTEXT_MENU_LABELS:
+                continue
+            other_x = (other_left + other_right) // 2
+            other_y = (other_top + other_bottom) // 2
+            if abs(other_x - center_x) <= 180 and 8 <= abs(other_y - center_y) <= 260:
+                corroborated = True
+                break
+        if not corroborated:
+            continue
+        candidates.append((dx * dx + dy * dy, center_x, center_y))
+    if not candidates:
+        return None
+    _, x, y = min(candidates)
+    return x, y
 
 
 def chat_region(window: gui.Window, config: dict[str, Any]) -> dict[str, int]:
@@ -395,7 +834,8 @@ def build_ocr_row(config: dict[str, Any], state: dict[str, Any], text: str) -> t
     # scans; a short state-backed cooldown below prevents the same visible line
     # from being submitted on every polling pass while still allowing a later
     # identical question to be handled.
-    fingerprint = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:32]
+    identity_text = " ".join(normalized.split())
+    fingerprint = hashlib.sha256(identity_text.encode("utf-8")).hexdigest()[:32]
     next_id = int(state.get("ocr_next_local_id") or 0) + 1
     state["ocr_next_local_id"] = next_id
     now = int(time.time())
@@ -437,7 +877,13 @@ def send_gui_file(config: dict[str, Any], path: Path) -> str:
 
 
 def normalize_message_text(text: str) -> str:
-    return " ".join(str(text or "").replace("\r", " ").replace("\n", " ").split()).strip()
+    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = [" ".join(line.split()) for line in raw.split("\n")]
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines)
 
 
 def slug(value: str) -> str:

@@ -33,7 +33,164 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
 5\t1\t1\t1\t1\t10\t20\t10\t10\t90\t@OverTree
 5\t1\t1\t1\t2\t30\t50\t10\t10\t90\tnow
 """
-        self.assertEqual([item["text"] for item in module.parse_ocr_lines(tsv)], ["@OverTree", "question now"])
+        lines = module.parse_ocr_lines(tsv)
+        self.assertEqual([item["text"] for item in lines], ["@OverTree", "question now"])
+        self.assertEqual((lines[0]["left"], lines[0]["top"], lines[0]["right"], lines[0]["bottom"]), (10, 20, 20, 30))
+        self.assertEqual((lines[1]["left"], lines[1]["right"]), (10, 40))
+
+    def test_ocr_line_coordinates_map_zoomed_crop_to_screen(self):
+        module = load_module()
+        tsv = """level\tpage_num\tblock_num\tpar_num\tline_num\tleft\ttop\twidth\theight\tconf\ttext
+5\t1\t1\t1\t1\t100\t50\t80\t40\t95\t复制
+"""
+
+        lines = module.parse_ocr_lines(tsv, scale=2.5, offset=(700, 400))
+
+        self.assertEqual((lines[0]["left"], lines[0]["top"], lines[0]["right"], lines[0]["bottom"]), (740, 420, 772, 436))
+
+    def test_passive_signature_discards_small_pixel_changes(self):
+        module = load_module()
+        count = module.PASSIVE_SIGNATURE_SIZE[0] * module.PASSIVE_SIGNATURE_SIZE[1]
+        first = bytes([0x20]) * count
+        small_change = bytes([0x2F]) * count
+        visible_change = bytes([0x30]) * count
+
+        self.assertEqual(
+            module.quantized_pixel_signature(first),
+            module.quantized_pixel_signature(small_change),
+        )
+        self.assertNotEqual(
+            module.quantized_pixel_signature(first),
+            module.quantized_pixel_signature(visible_change),
+        )
+
+    def test_active_scan_runs_on_change_or_bounded_rescan(self):
+        module = load_module()
+        state = {"screen_signature": "stable", "group_key": "groups", "last_active_scan_at": 1000}
+
+        self.assertEqual(
+            module.active_scan_decision(state, "stable", "groups", now=1010, rescan_seconds=180),
+            (False, "screen_unchanged"),
+        )
+        self.assertEqual(
+            module.active_scan_decision(state, "changed", "groups", now=1010, rescan_seconds=180),
+            (True, "screen_changed"),
+        )
+        self.assertEqual(
+            module.active_scan_decision(state, "stable", "groups", now=1180, rescan_seconds=180),
+            (True, "safety_rescan_due"),
+        )
+
+    def test_ocr_trigger_uses_native_copy_for_complete_multiline_bubble(self):
+        module = load_module()
+        tsv = """level\tpage_num\tblock_num\tpar_num\tline_num\tleft\ttop\twidth\theight\tconf\ttext
+5\t1\t1\t1\t1\t160\t32\t80\t32\t95\t@OverTree
+"""
+        module.gui.screenshot = mock.Mock()
+        module.run_command = mock.Mock(return_value=type("Result", (), {"stdout": tsv})())
+        module.copy_text_bubble = mock.Mock(return_value="@OverTree 请分析第一部分\n并完整处理第二部分内容")
+        window = type("Window", (), {"x": 10, "y": 20, "width": 1000, "height": 800})()
+        config = {
+            "personal_group_cloud": {"trigger_prefixes": ["@OverTree"]},
+            "chat_region": {"left": 100, "top": 50, "right": 0, "bottom": 0},
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = module.ocr_triggered_message({"DISPLAY": ":97"}, window, config, Path(tmp))
+
+        self.assertEqual(result["method"], "native_copy")
+        self.assertEqual(result["text"], "@OverTree 请分析第一部分\n并完整处理第二部分内容")
+        module.copy_text_bubble.assert_called_once_with(
+            {"DISPLAY": ":97"}, window, 235, 100, evidence=Path(tmp)
+        )
+
+    def test_copy_menu_requires_exact_copy_action_near_bubble(self):
+        module = load_module()
+        lines = [
+            {"text": "复制链接", "left": 510, "top": 330, "right": 570, "bottom": 350},
+            {"text": "复制", "left": 520, "top": 360, "right": 550, "bottom": 380},
+            {"text": "转发", "left": 520, "top": 392, "right": 550, "bottom": 412},
+            {"text": "复制", "left": 1200, "top": 400, "right": 1230, "bottom": 420},
+        ]
+
+        self.assertEqual(module.find_copy_menu_action(lines, 500, 300), (535, 370))
+        self.assertIsNone(module.find_copy_menu_action([lines[0]], 500, 300))
+        self.assertIsNone(module.find_copy_menu_action([lines[1]], 500, 300))
+        above_cursor_menu = [
+            {"text": "复制", "left": 500, "top": 520, "right": 540, "bottom": 540},
+            {"text": "转发", "left": 500, "top": 552, "right": 540, "bottom": 572},
+        ]
+        self.assertEqual(module.find_copy_menu_action(above_cursor_menu, 520, 700), (520, 530))
+
+    def test_native_copy_uses_fresh_clipboard_and_clicks_detected_menu_action(self):
+        module = load_module()
+        owner = mock.Mock()
+        action_lines = [
+            {"text": "复制", "left": 500, "top": 330, "right": 540, "bottom": 350},
+            {"text": "转发", "left": 500, "top": 370, "right": 540, "bottom": 390},
+        ]
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(module, "start_clipboard_probe", return_value=owner) as start_probe, \
+             mock.patch.object(module, "read_x_clipboard", return_value="@OverTree 完整问题"), \
+             mock.patch.object(module, "stop_clipboard_probe") as stop_probe, \
+             mock.patch.object(module, "parse_ocr_lines", return_value=action_lines), \
+             mock.patch.object(module, "run_command", return_value=type("Result", (), {"stdout": "tsv"})()), \
+             mock.patch.object(module.gui, "run", return_value=type("Result", (), {"stdout": "1200 800"})()) as run, \
+             mock.patch.object(module.gui, "screenshot") as screenshot, \
+             mock.patch.object(module.gui, "click") as click, \
+             mock.patch.object(module.time, "sleep"):
+            result = module.copy_text_bubble(
+                {"DISPLAY": ":97"},
+                type("Window", (), {"x": 0, "y": 0, "width": 1200, "height": 800})(),
+                480,
+                300,
+                evidence=Path(tmp),
+            )
+
+        self.assertEqual(result, "@OverTree 完整问题")
+        self.assertTrue(start_probe.called)
+        self.assertEqual(run.call_args_list[0].args[0], ["xdotool", "mousemove", "480", "300", "click", "3"])
+        self.assertEqual(run.call_args_list[1].args[0], ["xdotool", "getdisplaygeometry"])
+        self.assertEqual(click.call_args.args[1:], (520, 340))
+        self.assertEqual(screenshot.call_count, 1)
+        stop_probe.assert_called_once_with(owner)
+
+    def test_native_copy_refuses_stale_clipboard_value(self):
+        module = load_module()
+        owner = mock.Mock()
+        action_lines = [
+            {"text": "Copy", "left": 500, "top": 330, "right": 540, "bottom": 350},
+            {"text": "Forward", "left": 500, "top": 370, "right": 540, "bottom": 390},
+        ]
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(module, "start_clipboard_probe", return_value=owner) as start_probe, \
+             mock.patch.object(module, "read_x_clipboard") as read_clipboard, \
+             mock.patch.object(module, "stop_clipboard_probe"), \
+             mock.patch.object(module, "parse_ocr_lines", return_value=action_lines), \
+             mock.patch.object(module, "run_command", return_value=type("Result", (), {"stdout": "tsv"})()), \
+             mock.patch.object(module.gui, "run"), \
+             mock.patch.object(module.gui, "screenshot"), \
+             mock.patch.object(module.gui, "click"), \
+             mock.patch.object(module.time, "sleep"):
+            read_clipboard.side_effect = lambda _env: start_probe.call_args.args[1]
+            result = module.copy_text_bubble(
+                {"DISPLAY": ":97"},
+                type("Window", (), {"x": 0, "y": 0, "width": 1200, "height": 800})(),
+                480,
+                300,
+                evidence=Path(tmp),
+            )
+
+        self.assertEqual(result, "")
+
+    def test_clipboard_copy_waits_for_fresh_value_and_rejects_sentinel(self):
+        module = load_module()
+        values = iter(["__marker__", "__marker__", "full copied message"])
+        with mock.patch.object(module, "read_x_clipboard", side_effect=lambda _env: next(values)), \
+             mock.patch.object(module.time, "sleep"):
+            result = module.wait_for_clipboard_text({}, "__marker__", timeout=1.0)
+
+        self.assertEqual(result, "full copied message")
 
     def test_build_row_uses_private_stable_identity_and_context_fingerprint(self):
         module = load_module()
@@ -46,6 +203,22 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
             self.assertEqual(row["server_id"], "ocr-" + fingerprint)
             self.assertEqual(row["content"], "@OverTree 请分析")
             self.assertEqual(state["ocr_next_local_id"], 1)
+
+    def test_normalization_preserves_newlines_but_fingerprint_normalizes_spacing(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            module.PRIVATE = Path(tmp)
+            state = {}
+            first, first_fingerprint = module.build_ocr_row(
+                {"chat_name": "客户群"}, state, "@OverTree 第一行\n第二行"
+            )
+            second, second_fingerprint = module.build_ocr_row(
+                {"chat_name": "客户群"}, state, "@OverTree   第一行 第二行"
+            )
+
+        self.assertEqual(first["content"], "@OverTree 第一行\n第二行")
+        self.assertEqual(first_fingerprint, second_fingerprint)
+        self.assertEqual(second["content"], "@OverTree 第一行 第二行")
 
     def test_same_visible_line_is_suppressed_during_cooldown(self):
         module = load_module()
@@ -226,6 +399,94 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
             self.assertEqual(module.send_gui_message({"ingress": "direct_chat"}, "回复"), "sent")
         self.assertTrue(captured[0][0]["_visual_only_send"])
         self.assertFalse(captured[1][0]["_visual_only_send"])
+
+    def test_unchanged_screen_path_polls_cloud_without_touching_wechat_gui(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            private = Path(tmp) / "private"
+            private.mkdir()
+            module.PRIVATE = private
+            config = {
+                "enabled": True,
+                "ingress": "ocr_gui",
+                "chat_name": "OvertreeAI 测试",
+                "chatroom_id": "ocr-title-test",
+                "state_path": str(private / "group.state.json"),
+                "send_target": {"name": "OvertreeAI 测试", "expected_title": "OvertreeAI 测试"},
+                "personal_group_cloud": {"enabled": True, "trigger_prefixes": ["@OverTree"]},
+            }
+            args = type("Args", (), {"display": ":97", "require_unread_badge": False})()
+            expected = {"state": {}, "metrics": {"idle": True}}
+
+            with mock.patch.object(module, "run_cloud_once", return_value=expected) as poll_cloud, \
+                 mock.patch.object(module.gui, "require_tools") as require_tools:
+                result = module.scan_group(args, config, Path(tmp) / "group.json", scan_gui=False)
+
+        self.assertEqual(result["extraction_method"], "not_scanned")
+        poll_cloud.assert_called_once()
+        self.assertEqual(poll_cloud.call_args.args[2], [])
+        require_tools.assert_not_called()
+
+    def test_passive_screen_failure_still_polls_cloud_without_gui_scan(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            private = Path(tmp) / "private"
+            private.mkdir()
+            module.PRIVATE = private
+            module.GUI_LOCK = private / "wechat_gui_send.lock"
+            args = type("Args", (), {"display": ":97", "active_rescan_seconds": 180})()
+            prepared = [({"chat_name": "客户群"}, Path(tmp) / "group.json")]
+
+            with mock.patch.object(module, "observe_passive_screen", side_effect=RuntimeError("capture failed")), \
+                 mock.patch.object(module, "scan_group", return_value={"ok": True, "chat": "客户群"}) as scan:
+                results = module.scan_display_groups(args, ":97", prepared)
+
+        self.assertEqual(len(results), 2)
+        scan.assert_called_once_with(
+            args,
+            prepared[0][0],
+            prepared[0][1],
+            scan_gui=False,
+            seed_only=False,
+        )
+
+    def test_initial_scan_seeds_existing_mention_without_cloud_submission(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            private = Path(tmp) / "private"
+            private.mkdir()
+            module.PRIVATE = private
+            module.GUI_LOCK = private / "wechat_gui_send.lock"
+            config = {
+                "enabled": True,
+                "ingress": "ocr_gui",
+                "chat_name": "OvertreeAI 测试",
+                "chatroom_id": "ocr-title-test",
+                "state_path": str(private / "group.state.json"),
+                "send_target": {"name": "OvertreeAI 测试", "expected_title": "OvertreeAI 测试"},
+                "personal_group_cloud": {"enabled": True, "trigger_prefixes": ["@OverTree"]},
+            }
+            args = type("Args", (), {"display": ":97", "require_unread_badge": False})()
+            cloud_result = {"state": {}, "metrics": {"idle": True}}
+            window = type("Window", (), {"x": 0, "y": 0, "width": 916, "height": 700})()
+
+            with mock.patch.object(module.gui, "require_tools"), \
+                 mock.patch.object(module.gui, "wait_for_main_wechat_window", return_value=window), \
+                 mock.patch.object(module.gui, "open_target", return_value={"ok": True}), \
+                 mock.patch.object(module, "ocr_triggered_message", return_value={
+                     "text": "@OverTree 第一行\n第二行", "method": "native_copy",
+                 }), \
+                 mock.patch.object(module, "run_cloud_once", return_value=cloud_result) as poll_cloud:
+                result = module.scan_group(
+                    args, config, private / "group.json", scan_gui=True, seed_only=True
+                )
+
+            saved = json.loads((private / "group.state.json").read_text(encoding="utf-8"))
+
+        self.assertTrue(result["seeded"])
+        self.assertFalse(result["submitted"])
+        self.assertEqual(poll_cloud.call_args.args[2], [])
+        self.assertEqual(len(saved["ocr_seen_fingerprints"]), 1)
 
 
 if __name__ == "__main__":

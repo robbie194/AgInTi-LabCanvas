@@ -180,18 +180,33 @@ sudo -u overtree-wechat env HOME=/home/overtree-wechat \
 
 For Cloud-registered groups, set `WECHAT_OCR_GROUP_REMOTE_SYNC=true` in the
 private local environment and reload monitors after deploying the matching
-Cloud version. The loop discovers those registered titles itself. It opens
-only each configured exact title, OCRs the visible chat region,
-and forwards the newest line containing the configured `@OverTree` trigger or
-a standalone eight-character binding code. The same visible line is suppressed
-for 15 minutes by default (`WECHAT_OCR_DEDUP_SECONDS`); a changed line is
-eligible immediately. The unread red-marker option is a best-effort heuristic,
-not a title or identity check. Inbound images and files are intentionally not
-read in this first OCR path. Text replies from OCR groups click the visible
-bottom-right Send control in X desktop coordinates and verify that the draft
-cleared; this route does not require a native WeChat database receipt. Other
-WeChat text sends keep their existing native receipt verification. Cloud result
-files still use the existing guarded file-delivery path.
+Cloud version. The loop discovers those registered titles itself. Every
+`WECHAT_OCR_GROUP_INTERVAL` (3 seconds by default), it takes a local screenshot
+of the Agent-WeChat desktop, reduces the conversation-list/chat-tail crop to a
+quantized 96x64 signature, and compares its hash with the previous sample. An
+unchanged screen skips group navigation and OCR. A changed screen, new group
+configuration, or the `WECHAT_OCR_GROUP_ACTIVE_RESCAN_SECONDS` safety interval
+(180 seconds by default) starts an active pass over exact configured titles.
+Already-running Cloud tasks and queued replies continue to be reconciled during
+idle passes without opening a chat.
+
+During an active pass, OCR locates the newest configured `@OverTree` line. The
+monitor right-clicks inside that line's message bubble, identifies the native
+`复制`/`Copy` menu item in a magnified crop beside the click, corroborates it
+with a neighboring menu action, and reads the X clipboard only after verifying
+it no longer contains a unique sentinel. The copied bubble text is the
+submitted message, including its line breaks; OCR text remains the fallback if
+the menu or clipboard check fails. A standalone eight-character binding code
+continues to be accepted from OCR. The same normalized message is suppressed for 15
+minutes by default (`WECHAT_OCR_DEDUP_SECONDS`); an eligible changed message
+can enter immediately. The unread red-marker option is still a best-effort
+heuristic, not a title or identity check. Inbound images and files are
+intentionally not read in this first OCR path. Text replies from OCR groups
+click the visible bottom-right Send control in X desktop coordinates and verify
+that the draft cleared; this route does not require a native WeChat database
+receipt. Other WeChat text sends keep their existing native receipt
+verification. Cloud result files still use the existing guarded file-delivery
+path.
 
 After Cloud registry sync is enabled, `wechat_agent_profile.sh reload-monitors`
 starts or reloads the `ocr-group` supervisor window. To roll back registry

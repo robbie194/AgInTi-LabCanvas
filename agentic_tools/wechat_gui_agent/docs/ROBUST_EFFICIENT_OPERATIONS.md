@@ -110,6 +110,28 @@ noVNC scaling changes only the browser viewport; it does not change the X displa
 coordinates used by the sender. Keep the OCR route behind its existing explicit
 group config and feature flags.
 
+The OCR monitor samples a quantized grayscale signature of the allowlisted
+Agent-WeChat desktop every `WECHAT_OCR_GROUP_INTERVAL` (3 seconds by default).
+It crops the conversation list and visible chat tail, downsizes the sample to
+96x64, quantizes pixel levels, and compares a local hash. An unchanged screen
+skips GUI navigation and OCR; a changed screen or the bounded
+`WECHAT_OCR_GROUP_ACTIVE_RESCAN_SECONDS` safety interval (180 seconds by
+default) starts an active pass. Empty-screen Cloud polls still reconcile
+already-submitted tasks and the reply outbox without taking over the chat UI.
+After the exact group-title guard succeeds, OCR locates an addressed text
+bubble. The monitor opens that bubble's native context menu, crops and enlarges
+the region beside the click, then corroborates the exact Copy row with a nearby
+native menu action. It validates
+that X clipboard text replaced a unique sentinel, and treats the copied
+message as authoritative. It allows up to 1.5 seconds for clipboard ownership
+to update. Ambiguous menus or stale clipboard contents fall back to the
+bounded OCR text; no menu item is clicked unless OCR identifies the exact Copy
+label. The context menu is dismissed after an unsuccessful copy attempt. This
+path uses local image processing and clipboard operations; idle sampling does
+not invoke an LLM or consume model API tokens.
+`WECHAT_OCR_GROUP_NATIVE_COPY=false` disables native Copy and retains the
+prior OCR-only behavior for rollback.
+
 On a shared Ubuntu workstation, run Agent-WeChat under a dedicated Linux user,
 HOME/XDG directories, private LabCanvas data directory, and its own X display.
 Two processes or two virtual displays under the normal user's HOME do not

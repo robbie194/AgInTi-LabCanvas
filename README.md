@@ -81,6 +81,11 @@ and sends replies through the local Agent-WeChat GUI, so the first version does
 not need LazyEdge. For running the Agent account on this same Ubuntu workstation
 beside a normal WeChat account, use the [local Agent-WeChat profile and
 acceptance guide](docs/WECHAT_PERSONAL_GROUP_LOCAL_PROFILE.md).
+When reloaded, the OCR monitor uses a quantized local screenshot signature to
+skip unchanged screens, then uses OCR to locate a triggered bubble and the
+nearby magnified native Copy menu plus the isolated X clipboard to read its
+full text. OCR stays as a bounded fallback; Cloud task/result polling continues
+while the GUI is idle.
 The guide includes a loopback-only SSH tunnel and `wechat_agent_profile.sh
 add-group`, which creates one private state/config per exact group.
 If noVNC opens to a black screen, use the

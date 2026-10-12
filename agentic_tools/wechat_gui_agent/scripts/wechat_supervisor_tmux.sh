@@ -54,6 +54,7 @@ OCR_GROUP_CONFIGS="${WECHAT_OCR_GROUP_CONFIGS:-}"
 OCR_GROUP_REMOTE_SYNC="${WECHAT_OCR_GROUP_REMOTE_SYNC:-0}"
 OCR_GROUP_INTERVAL="${WECHAT_OCR_GROUP_INTERVAL:-3}"
 OCR_GROUP_REQUIRE_BADGE="${WECHAT_OCR_GROUP_REQUIRE_BADGE:-0}"
+OCR_GROUP_ACTIVE_RESCAN_SECONDS="${WECHAT_OCR_GROUP_ACTIVE_RESCAN_SECONDS:-180}"
 TINY11=0
 if PYTHONPATH="$ROOT/agentic_tools/wechat_gui_agent/scripts" python3 -c \
   'from wechat_transport_selection import tiny11_enabled; raise SystemExit(0 if tiny11_enabled() else 1)'; then
@@ -164,6 +165,8 @@ Environment:
   WECHAT_OCR_GROUP_REMOTE_SYNC  1 to sync registered group names from OverTree Cloud
   WECHAT_OCR_GROUP_INTERVAL  OCR group scan interval, default 3 seconds
   WECHAT_OCR_GROUP_REQUIRE_BADGE  1 to require a visible unread red marker before opening a group
+  WECHAT_OCR_GROUP_ACTIVE_RESCAN_SECONDS  OCR safety rescan interval when the screen is unchanged, default 180 seconds
+  WECHAT_OCR_GROUP_NATIVE_COPY  false to disable native bubble Copy and keep the OCR fallback
   WECHAT_WORKER_COUNT         parallel queue workers, default 2
   WECHAT_LOG_MAINTENANCE      1 to cap generated logs/evidence, default 1
   WECHAT_LOG_MAINTENANCE_INTERVAL  retention pass interval, default 300 seconds
@@ -300,7 +303,7 @@ android_screen_ingress_command() {
 }
 
 ocr_group_command() {
-  local args=(python3 -u agentic_tools/wechat_gui_agent/scripts/wechat_ocr_group_ingress.py --configs "$OCR_GROUP_CONFIGS" --display "$WECHAT_DISPLAY" --interval "$OCR_GROUP_INTERVAL" --loop --send)
+  local args=(python3 -u agentic_tools/wechat_gui_agent/scripts/wechat_ocr_group_ingress.py --configs "$OCR_GROUP_CONFIGS" --display "$WECHAT_DISPLAY" --interval "$OCR_GROUP_INTERVAL" --active-rescan-seconds "$OCR_GROUP_ACTIVE_RESCAN_SECONDS" --loop --send)
   if [[ "$OCR_GROUP_REQUIRE_BADGE" != "0" ]]; then
     args+=(--require-unread-badge)
   fi
