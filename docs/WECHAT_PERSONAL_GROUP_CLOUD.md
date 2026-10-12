@@ -255,8 +255,9 @@ binding is active. On 2026-10-12 the binding confirmation was successfully sent:
 the visible sender returned `sent-visible`, the composer cleared, the
 confirmation was recognized in the sent screenshot, and the retry outbox became
 empty. Six stale invalid-code notices were removed from the private retry queue
-after a private state backup; they were not sent. No Agent question/result has
-yet been exercised end-to-end. The current OCR pilot does not read inbound
+after a private state backup; they were not sent. A subsequent Cloud result entered the local outbox and was sent with
+`sent-visible`; both the pending queue and outbox then became empty. Recipient
+read status and file delivery have not been verified. The current OCR pilot does not read inbound
 images or files. We cannot verify group membership, media availability, Cloud
 firewall rules, or Tencent account status from this repository alone. The
 Enterprise WeChat Customer Service Gateway remains a separate self-service
