@@ -223,6 +223,11 @@ python3 agentic_tools/wechat_gui_agent/scripts/wechat_gui_send.py \
 Each send writes a `send_manifest.json`, screenshots, an `events` row, and a
 searchable `messages` row.
 
+OCR-only personal-group replies use the visible Send control and verify that
+the composer clears; they do not wait for a native message-database receipt.
+Other WeChat routes keep native receipt verification. The click uses X display
+coordinates, so resizing the noVNC browser view does not change it.
+
 ## 5. Capture Reads
 
 Open the chat, then capture the visible screen:
@@ -293,6 +298,12 @@ visually confirmed. Creating a group is a real WeChat action and notifies users.
   `open_click` for the visible chat list or update the offset from a screenshot.
 - If OCR is empty, install the needed Tesseract language pack, increase
   `WECHAT_INITIAL_TITLE_WAIT`, or inspect the saved full-page OCR screenshot.
+- If an OCR-group reply stays in the composer, inspect its send manifest and
+  the group's outbox before retrying. `sent-visible` means the guarded Send
+  control was clicked and the composer cleared; confirm the sent screenshot or
+  visible group bubble before claiming delivery. `uncertain` stops automatic
+  retry when text remains in the composer. Do not click Send again until you
+  verify whether a bubble already appeared, to avoid a duplicate.
 - If a worker result cannot be sent, inspect `send_failed` tasks in
   `.private/wechat_task_queue.jsonl`; the worker records the error instead of
   retrying forever.

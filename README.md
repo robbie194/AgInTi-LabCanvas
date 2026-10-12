@@ -69,9 +69,12 @@ sending a fresh code in that same group switches only that group's project and
 session. New bindings disconnect after 24 hours without a Cloud conversation by
 default, with 3-day, 7-day, and never-expire choices in Cloud.
 
-Keep both `CLOUD_WECHAT_PERSONAL_GROUP_ENABLED` in Cloud and
-`WECHAT_PERSONAL_GROUP_ENABLED` in LabCanvas disabled until the isolated
-acceptance checks pass. The adapter calls Cloud's separate HMAC-signed
+The isolated `OvertreeAI 测试` OCR pilot is active and bound to its selected
+Cloud project/session. Its binding confirmation was verified in the group on
+2026-10-12 after fixing OCR-only text delivery. Other group configs stay
+disabled by default. The Cloud group-registration UI/API is implemented in the
+source tree but is not deployed to the live Cloud service yet, so only the
+preconfigured pilot group is currently available. The adapter calls Cloud's separate HMAC-signed
 `/internal/wechat/personal-groups/v1/*` routes over a private VPN or SSH tunnel;
 never expose `/internal/*` on the public reverse proxy. LabCanvas polls Cloud
 and sends replies through the local Agent-WeChat GUI, so the first version does
@@ -85,6 +88,19 @@ If noVNC opens to a black screen, use the
 When Tencent requires a newer Linux WeChat, the Agent can use a private client
 binary through `WECHAT_BINARY`, leaving the normal account's shared install
 unchanged; see the local profile guide above.
+
+The current personal-group pilot uses an opt-in visible GUI/OCR ingress. Create
+one private group config with `wechat_ocr_group_config.py --enable`, verify it
+with a one-shot `wechat_ocr_group_ingress.py --once --send`, then use
+`reload-monitors`. (The generator's `--enable` sets the private config and
+`WECHAT_OCR_GROUP_ENABLED`; omit it to keep preparation disabled.) It reads only the
+newest visible line containing `@OverTree` or an eight-character binding code,
+deduplicates that line for a configurable cooldown, and does not read the
+WeChat database or process memory. Inbound media is deferred; Cloud result
+files still use the existing guarded GUI delivery path. OCR replies use the
+visible Send control in X desktop coordinates and verify that the composer
+clears; noVNC browser scaling does not change those coordinates. See
+[the OCR setup](docs/WECHAT_PERSONAL_GROUP_CLOUD.md#guiocr-group-ingress).
 
 ## Quick Start
 

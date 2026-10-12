@@ -128,6 +128,10 @@ class PersonalGroupCloudClient:
         query = urlencode({"agentAccountId": self.agent_account_id, "groupId": group_id})
         return self.request("GET", f"/internal/wechat/personal-groups/v1/bindings/resolve?{query}")
 
+    def list_registered_groups(self) -> dict[str, Any]:
+        query = urlencode({"agentAccountId": self.agent_account_id})
+        return self.request("GET", f"/internal/wechat/personal-groups/v1/groups?{query}")
+
     def submit(self, group_id: str, message: dict[str, Any]) -> dict[str, Any]:
         return self.request("POST", "/internal/wechat/personal-groups/v1/messages", {
             "agentAccountId": self.agent_account_id,
@@ -173,8 +177,13 @@ def build_client(config: dict[str, Any], *, environ: dict[str, str] | None = Non
     allowlist = {value.strip() for value in str(env.get("WECHAT_PERSONAL_GROUP_ALLOWLIST") or "").split(",") if value.strip()}
     if not group_id or group_id not in allowlist:
         raise PersonalGroupCloudError("This exact WeChat group is not in WECHAT_PERSONAL_GROUP_ALLOWLIST.")
-    if str(env.get("WECHAT_PERSONAL_GROUP_ENABLED") or "").lower() != "true":
-        raise PersonalGroupCloudError("WECHAT_PERSONAL_GROUP_ENABLED must be true for this isolated group config.")
+    personal_enabled = str(env.get("WECHAT_PERSONAL_GROUP_ENABLED") or "").lower() == "true"
+    ocr_enabled = (
+        str(config.get("ingress") or "") == "ocr_gui"
+        and str(env.get("WECHAT_OCR_GROUP_ENABLED") or "").lower() == "true"
+    )
+    if not (personal_enabled or ocr_enabled):
+        raise PersonalGroupCloudError("The personal-group or OCR-group feature flag must be enabled for this config.")
     client = PersonalGroupCloudClient(
         base_url=env.get("WECHAT_PERSONAL_GROUP_CLOUD_URL", ""),
         secret=env.get("WECHAT_PERSONAL_GROUP_SHARED_SECRET", ""),
@@ -183,6 +192,20 @@ def build_client(config: dict[str, Any], *, environ: dict[str, str] | None = Non
         opener=opener,
     )
     return client, group_id
+
+
+def build_registry_client(*, environ: dict[str, str] | None = None,
+                          opener: Callable[..., Any] = urlopen) -> PersonalGroupCloudClient:
+    env = os.environ if environ is None else environ
+    if str(env.get("WECHAT_OCR_GROUP_ENABLED") or "").lower() != "true":
+        raise PersonalGroupCloudError("OCR personal-group ingress is disabled.")
+    return PersonalGroupCloudClient(
+        base_url=env.get("WECHAT_PERSONAL_GROUP_CLOUD_URL", ""),
+        secret=env.get("WECHAT_PERSONAL_GROUP_SHARED_SECRET", ""),
+        agent_account_id=env.get("WECHAT_PERSONAL_GROUP_AGENT_ACCOUNT_ID", ""),
+        timeout=float(env.get("WECHAT_PERSONAL_GROUP_TIMEOUT_SECONDS") or 20),
+        opener=opener,
+    )
 
 
 def _utf8_limit(value: str, maximum_bytes: int = 30_000) -> str:
@@ -329,6 +352,8 @@ def _flush_outbox(config: dict[str, Any], state: dict[str, Any], send_text: Call
     if not outbox:
         return None, None
     item = outbox[0]
+    if item.get("deliveryUncertain"):
+        return None, "OCR delivery requires review before retry."
     if float(item.get("nextAttemptAt") or 0) > now:
         return None, None
     sending_at = float(item.get("sendingAt") or 0)
@@ -352,6 +377,8 @@ def _flush_outbox(config: dict[str, Any], state: dict[str, Any], send_text: Call
         attempts = int(item.get("attempts") or 0) + 1
         item["attempts"] = attempts
         item["lastError"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+        if config.get("ingress") == "ocr_gui" and "WECHAT_GUI_SEND_UNCERTAIN" in str(exc):
+            item["deliveryUncertain"] = True
         item["nextAttemptAt"] = now + min(300, 2 ** min(attempts, 8))
         item.pop("sendingAt", None)
         return None, item["lastError"]

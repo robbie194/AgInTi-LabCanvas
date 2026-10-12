@@ -100,6 +100,16 @@ the operator's personal WeChat account and is not an official Tencent bot API;
 do not promise zero account risk. See the
 [local Agent profile guide](../../../docs/WECHAT_PERSONAL_GROUP_LOCAL_PROFILE.md).
 
+For OCR-only groups, synthetic visible-text rows have no native WeChat message
+database receipt. Route only `ingress=ocr_gui` text replies through the
+receipt-free visual sender: click the guarded chat's visible Send control using
+X desktop coordinates, then verify the composer is empty. If the composer still
+contains text, record an uncertain send and stop automatic retry to avoid a
+duplicate. Other personal-WeChat sends retain native receipt verification.
+noVNC scaling changes only the browser viewport; it does not change the X display
+coordinates used by the sender. Keep the OCR route behind its existing explicit
+group config and feature flags.
+
 On a shared Ubuntu workstation, run Agent-WeChat under a dedicated Linux user,
 HOME/XDG directories, private LabCanvas data directory, and its own X display.
 Two processes or two virtual displays under the normal user's HOME do not

@@ -8531,7 +8531,7 @@ def send_gui_message(config: dict[str, Any], message: str) -> str:
     if is_no_reply_control(message):
         return ""
     from wechat_transport_selection import tiny11_enabled, send_tiny11
-    if tiny11_enabled():
+    if tiny11_enabled() and config.get("_visual_only_send") is not True:
         target = config.get('send_target') or {}
         if not target.get('name'):
             raise RuntimeError('Refusing unguarded Windows WeChat send')
@@ -8612,6 +8612,8 @@ def send_gui_message_once(config: dict[str, Any], message: str) -> str:
         "--mirror-db",
         str(Path(config.get("mirror_db", DEFAULT_DB))),
     ]
+    if config.get("_visual_only_send") is True:
+        command.append("--visual-only-send")
     if gui_search_allowed(config, target):
         command.append("--allow-search")
     else:

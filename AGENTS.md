@@ -189,6 +189,13 @@ Cloud requests and group sends, and never forward a one-time binding code into
 the Cloud session after an uncertain claim response. Document updates belong
 in both `README.md` and `agentic_tools/wechat_gui_agent/docs/ROBUST_EFFICIENT_OPERATIONS.md`.
 
+The explicitly enabled OverTree OCR pilot is a separate visible-GUI ingress:
+it uses synthetic rows and must not require native database IDs or receipts.
+Accept binding codes only as standalone lines. OCR text sends require an exact
+title guard and composer-clear verification; uncertain deliveries must stay
+persistently held for review, including after restart. Keep other transports'
+native receipt checks and per-group state isolation unchanged.
+
 ## Commit & Pull Request Guidelines
 
 Use concise imperative commit messages, such as `Add Unity target validation` or `Document BioRender MCP setup`. Pull requests should include a summary, testing performed, linked issues when applicable, and screenshots only for UI-facing changes.

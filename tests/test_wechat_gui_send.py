@@ -25,6 +25,17 @@ def load_wechat_gui_send():
 
 
 class WeChatGuiSendTests(unittest.TestCase):
+    def test_title_crop_adapts_to_narrow_main_wechat_window(self):
+        module = load_wechat_gui_send()
+        window = module.Window("main", 502, 206, 916, 666)
+
+        regions = module.title_crop_regions(window)
+
+        self.assertEqual(regions[0]["label"], "main_right_header_adaptive")
+        self.assertEqual(regions[0]["left"], 813)
+        self.assertEqual(regions[0]["width"], 384)
+        self.assertEqual(regions[1]["label"], "main_right_header_adaptive_high")
+
     def test_focus_synchronizes_x_focus_before_raise(self):
         module = load_wechat_gui_send()
         commands: list[list[str]] = []
@@ -1847,6 +1858,68 @@ class WeChatGuiSendTests(unittest.TestCase):
             key.assert_called_once_with({}, "Return")
             self.assertTrue(pending.exists())
             self.assertEqual(record.call_args.kwargs["status"], "uncertain")
+
+    def test_visual_only_send_uses_visible_button_without_native_receipt(self):
+        module = load_wechat_gui_send()
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.object(module, "reset_wechat_send_surface"),
+                mock.patch.object(module, "screenshot"),
+                mock.patch.object(module, "open_target", return_value={"ok": True}),
+                mock.patch.object(module, "focus"),
+                mock.patch.object(module, "clear_composer"),
+                mock.patch.object(module, "paste_text"),
+                mock.patch.object(module, "verify_composer_text"),
+                mock.patch.object(module, "same_screenshot", return_value=False),
+                mock.patch.object(module, "prepare_receipt", side_effect=AssertionError("native receipt must not be read")) as prepare,
+                mock.patch.object(module, "click_visible_send_button") as send_button,
+                mock.patch.object(module, "click"),
+                mock.patch.object(module, "read_composer_text", return_value=""),
+                mock.patch.object(module.time, "sleep"),
+                mock.patch.object(module, "record_event") as record,
+            ):
+                result = module.send_one(
+                    {}, module.Window("1", 0, 0, 1000, 700),
+                    module.TargetSpec("OvertreeAI 测试", "OvertreeAI 测试", "OvertreeAI 测试"),
+                    "绑定成功", True, False, 0, True, True, False,
+                    Path(tmp), Path(tmp) / "mirror.db", 1,
+                    visual_only_send=True,
+                )
+
+        self.assertEqual(result["status"], "sent-visible")
+        send_button.assert_called_once()
+        prepare.assert_not_called()
+        self.assertEqual(record.call_args.kwargs["metadata"]["delivery_verification"]["method"],
+                         "visible_send_button_composer_cleared")
+
+    def test_visual_only_send_preserves_uncertain_draft_without_retrying(self):
+        module = load_wechat_gui_send()
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.object(module, "reset_wechat_send_surface"),
+                mock.patch.object(module, "screenshot"),
+                mock.patch.object(module, "open_target", return_value={"ok": True}),
+                mock.patch.object(module, "focus"),
+                mock.patch.object(module, "clear_composer"),
+                mock.patch.object(module, "paste_text"),
+                mock.patch.object(module, "verify_composer_text"),
+                mock.patch.object(module, "same_screenshot", return_value=False),
+                mock.patch.object(module, "prepare_receipt", side_effect=AssertionError("native receipt must not be read")),
+                mock.patch.object(module, "click_visible_send_button"),
+                mock.patch.object(module, "click"),
+                mock.patch.object(module, "read_composer_text", return_value="draft still present"),
+                mock.patch.object(module.time, "sleep"),
+                mock.patch.object(module, "record_event") as record,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "WECHAT_GUI_SEND_UNCERTAIN"):
+                    module.send_one(
+                        {}, module.Window("1", 0, 0, 1000, 700),
+                        module.TargetSpec("OvertreeAI 测试", "OvertreeAI 测试", "OvertreeAI 测试"),
+                        "确认消息", True, False, 0, True, True, False,
+                        Path(tmp), Path(tmp) / "mirror.db", 1,
+                        visual_only_send=True,
+                    )
+        self.assertEqual(record.call_args.kwargs["status"], "uncertain")
 
     def test_pending_native_receipt_recovers_without_gui_send(self):
         module = load_wechat_gui_send()

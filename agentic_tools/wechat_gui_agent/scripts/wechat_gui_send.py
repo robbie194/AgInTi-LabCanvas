@@ -106,6 +106,11 @@ def main() -> int:
     parser.add_argument("--message", default="test", help="Message text. Default: test.")
     parser.add_argument("--send", action="store_true", help="Actually press Enter in the message composer.")
     parser.add_argument(
+        "--visual-only-send",
+        action="store_true",
+        help="For OCR-only group ingress, click the visible Send button and verify the composer clears instead of requiring a native database receipt.",
+    )
+    parser.add_argument(
         "--compose-dry-run",
         action="store_true",
         help="In dry-run mode, paste the message into the composer for screenshot review.",
@@ -200,6 +205,7 @@ def main() -> int:
                 download_file_size=args.download_file_size,
                 download_file_md5=args.download_file_md5,
                 outgoing_file=outgoing_file,
+                visual_only_send=args.visual_only_send,
             )
             results.append(result)
         fcntl.flock(lock, fcntl.LOCK_UN)
@@ -355,9 +361,10 @@ def send_one(
     download_file_size: int = 0,
     download_file_md5: str = "",
     outgoing_file: Path | None = None,
+    visual_only_send: bool = False,
 ) -> dict[str, Any]:
     pending_path = None
-    if do_send and outgoing_file is None and not download_file_title:
+    if do_send and not visual_only_send and outgoing_file is None and not download_file_title:
         pending_path = pending_receipt_path(target.__dict__, message)
         if pending_path.exists():
             pending = json.loads(pending_path.read_text(encoding="utf-8"))
@@ -530,20 +537,41 @@ def send_one(
     if same_screenshot(opened_path, composed_path):
         raise RuntimeError(f"Message compose did not visibly change the WeChat window for {target.name}")
     if do_send:
-        receipt = prepare_receipt(target.__dict__)
-        assert pending_path is not None
-        retain_pending_receipt(pending_path, receipt)
-        key(env, "Return")
-        time.sleep(pause)
-        sent_path = out_dir / f"{shot_prefix}-sent.png"
-        screenshot(env, sent_path)
-        delivery_verification = wait_native_receipt(receipt, message)
-        if not delivery_verification:
-            record_event(chat_name=target.name, query=target.query, action="send", direction="outbound",
-                         message=message, status="uncertain", db_path=mirror_db,
-                         screenshot_path=str(sent_path), metadata={"guard": guard, "native_receipt_pending": True})
-            raise RuntimeError("WECHAT_GUI_SEND_UNCERTAIN: no exact native outgoing message confirmed after Send")
-        status = "sent"
+        if visual_only_send:
+            click_visible_send_button(env, compose_window)
+            time.sleep(pause)
+            sent_path = out_dir / f"{shot_prefix}-sent.png"
+            screenshot(env, sent_path)
+            # The OCR-only route has no native message-database receipt. Confirm
+            # the visible UI consumed the exact draft after clicking Send. A
+            # remaining draft is ambiguous, so preserve it for review and do
+            # not retry automatically (which could duplicate a sent message).
+            focus(env, compose_window)
+            click(env, compose_window.x + int(compose_window.width * 0.66),
+                  compose_window.y + compose_window.height - 80)
+            remaining_text = read_composer_text(env, allow_empty=True)
+            if remaining_text:
+                record_event(chat_name=target.name, query=target.query, action="send", direction="outbound",
+                             message=message, status="uncertain", db_path=mirror_db,
+                             screenshot_path=str(sent_path), metadata={"guard": guard, "visual_send": True})
+                raise RuntimeError("WECHAT_GUI_SEND_UNCERTAIN: draft remains after clicking the visible Send button")
+            delivery_verification = {"verified": True, "method": "visible_send_button_composer_cleared"}
+            status = "sent-visible"
+        else:
+            receipt = prepare_receipt(target.__dict__)
+            assert pending_path is not None
+            retain_pending_receipt(pending_path, receipt)
+            key(env, "Return")
+            time.sleep(pause)
+            sent_path = out_dir / f"{shot_prefix}-sent.png"
+            screenshot(env, sent_path)
+            delivery_verification = wait_native_receipt(receipt, message)
+            if not delivery_verification:
+                record_event(chat_name=target.name, query=target.query, action="send", direction="outbound",
+                             message=message, status="uncertain", db_path=mirror_db,
+                             screenshot_path=str(sent_path), metadata={"guard": guard, "native_receipt_pending": True})
+                raise RuntimeError("WECHAT_GUI_SEND_UNCERTAIN: no exact native outgoing message confirmed after Send")
+            status = "sent"
         evidence_path = sent_path
     else:
         status = "dry-run-composed"
@@ -563,6 +591,11 @@ def send_one(
     if do_send and pending_path is not None:
         pending_path.unlink(missing_ok=True)
     return {"target": target.name, "status": status, "screenshot_prefix": shot_prefix}
+
+
+def click_visible_send_button(env: dict[str, str], window: Window) -> None:
+    """Click WeChat's bottom-right Send control in root-display coordinates."""
+    click(env, window.x + window.width - 58, window.y + window.height - 34)
 
 
 def send_file_to_open_chat(
@@ -2046,6 +2079,31 @@ def title_crop_regions(window: Window) -> list[dict[str, int | str]]:
                 "height": 78,
             }
         )
+    elif window.width < 1100:
+        # Recent Linux WeChat windows commonly open around 900px wide. The
+        # conversation header starts left of the legacy 360px crop offset, so
+        # use a proportion-based crop so the header is not cut off at this
+        # width; the existing popup and wide-window paths remain unchanged.
+        left_offset = min(360, max(260, int(window.width * 0.34)))
+        region_width = max(300, min(420, int(window.width * 0.42)))
+        regions.extend(
+            [
+                {
+                    "label": "main_right_header_adaptive",
+                    "left": window.x + left_offset,
+                    "top": window.y + 32,
+                    "width": region_width,
+                    "height": 78,
+                },
+                {
+                    "label": "main_right_header_adaptive_high",
+                    "left": window.x + left_offset,
+                    "top": window.y,
+                    "width": region_width,
+                    "height": 96,
+                },
+            ]
+        )
     else:
         regions.append(
             {
@@ -2386,7 +2444,7 @@ def verify_composer_text(env: dict[str, str], expected: str) -> None:
         )
 
 
-def read_composer_text(env: dict[str, str]) -> str:
+def read_composer_text(env: dict[str, str], *, allow_empty: bool = False) -> str:
     # Ctrl+C on an empty/unresponsive composer leaves the old clipboard intact.
     # Own it with a fresh nonce first so the earlier pasted message cannot pass.
     marker = "labcanvas-clipboard-probe-" + uuid.uuid4().hex
@@ -2405,9 +2463,9 @@ def read_composer_text(env: dict[str, str]) -> str:
         time.sleep(0.2)
         copied = run(["xclip", "-selection", "clipboard", "-o"], env=env).stdout
         run(["xdotool", "key", "--clearmodifiers", "ctrl+End"], env=env)
-        if copied == marker:
+        if copied == marker and not allow_empty:
             raise RuntimeError("WECHAT_COMPOSE_VERIFY_FAILED: WeChat did not copy text from its composer")
-        return copied
+        return "" if copied == marker else copied
     finally:
         if proc.poll() is None:
             proc.terminate()

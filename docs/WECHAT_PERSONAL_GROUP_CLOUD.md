@@ -6,21 +6,20 @@ transport only: Cloud owns the user, project, session, agent run, file intake,
 and result. The existing WeChat Customer Service and WeCom transports keep
 their separate routes and credentials.
 
-> **Current status (2026-10-11): paused before group testing.** The Agent
-> desktop login works, but this transport's message reader depends on
-> `ylytdeng/wechat-decrypt`, which GitHub disabled after a DMCA notice alleging
-> memory-based extraction of WeChat database keys. GitHub returns HTTP 403.
-> Do not install a mirror/fork, scan process memory, decrypt databases, create a
-> customer test group, or enable either group flag based on this guide. The
-> Cloud adapter remains disabled; use the existing WeChat Customer Service
-> one-to-one route while a supported message source is evaluated. Details:
-> <https://github.com/github/dmca/blob/master/2026/07/2026-07-13-wechat-3.md>.
+> **Current status (2026-10-12): the `OvertreeAI 测试` OCR pilot is running and bound to its selected Cloud project/session. Its binding confirmation was verified in the group after fixing the OCR-only sender.**
+> The database-decrypt reader remains unavailable and is not used. The pilot
+> reads visible text from explicitly configured groups through the desktop GUI,
+> Tesseract OCR, and the existing guarded sender. It never reads the WeChat
+> database or process memory. This remains personal-account GUI automation;
+> the isolated test profile is enabled only for the exact title `OvertreeAI 测试`
+> and the Cloud route still requires a one-time code for a selected project/session.
 
 ## Identity and isolation
 
 One operator-owned personal WeChat account can join several customer groups.
-Each exact group ID has one Cloud binding and maps to one customer's project
-and session. Each group gets its own local monitor state file and Cloud
+Each registered group has a Cloud-issued stable UUID and one unique, fixed
+visible title; it maps to one customer's project and session. Each group gets
+its own local monitor state file and Cloud
 binding, so customer A's history, files, mode, permissions, and Agent session
 do not enter customer B's group. Every human participant has the same role:
 any member can address the Agent, and Cloud keeps the sender's display name for
@@ -29,11 +28,9 @@ different permission classes.
 
 The WeChat account itself is still the operator's account. Every customer sees
 the same account name, avatar, and WeChat ID. This is logical Agent isolation,
-not a different WeChat identity for each customer. LabCanvas was designed to
-use the visible official desktop client plus local message-database access;
-this is personal-account automation, not an official Tencent Bot API, and it
-cannot be described as zero-risk. Its planned database reader is currently
-blocked by the DMCA removal above.
+not a different WeChat identity for each customer. The current OCR pilot uses
+the visible official desktop client only; it is personal-account automation,
+not an official Tencent Bot API, and it cannot be described as zero-risk.
 
 The two entrances have different identities:
 
@@ -87,6 +84,10 @@ CLOUD_WECHAT_PERSONAL_GROUP_AGENT_ACCOUNT_ID=personal-agent-main
 CLOUD_WECHAT_PERSONAL_GROUP_SECRET=<same-random-secret-as-LabCanvas>
 ```
 
+For the current isolated test, the Cloud personal-group adapter is enabled so
+it can accept the binding code. The checked-in defaults above remain off; the
+only local OCR config enabled on the test workstation is `OvertreeAI 测试`.
+
 Use a randomly generated secret with at least 32 characters. Put it only in
 the Cloud secret store and LabCanvas's private environment file. Do not put it
 in a checked-in config, URL, chat, or support ticket. Keep every `/internal/*`
@@ -108,87 +109,122 @@ WECHAT_PERSONAL_GROUP_SHARED_SECRET=<same-random-secret-as-Cloud>
 WECHAT_PERSONAL_GROUP_AGENT_ACCOUNT_ID=personal-agent-main
 WECHAT_PERSONAL_GROUP_MAX_ATTACHMENT_BYTES=52428800
 WECHAT_PERSONAL_GROUP_MAX_ATTACHMENTS_TOTAL_BYTES=52428800
+WECHAT_OCR_GROUP_ENABLED=true
+WECHAT_OCR_GROUP_REMOTE_SYNC=true
+WECHAT_OCR_GROUP_REGISTRY_REFRESH_SECONDS=30
+WECHAT_OCR_GROUP_TRIGGER_PREFIXES=@OverTree,＠OverTree
 ```
 
 `WECHAT_PERSONAL_GROUP_CLOUD_URL` must be the private Cloud address reachable
 from LabCanvas (for example, a local SSH-tunnel endpoint), not a public route
-that bypasses the reverse-proxy block. Add only the exact tested `chatroom_id`
-to `WECHAT_PERSONAL_GROUP_ALLOWLIST`; use comma-separated IDs only when each
-one has its own monitor configuration and state file.
+that bypasses the reverse-proxy block. When signed registry sync is enabled,
+the local scanner downloads only active group registrations from Cloud and
+adds those stable UUIDs to its in-memory allowlist. The static allowlist remains
+for the legacy pilot and does not need customer IDs added by hand.
 
-In the planned pilot, a LabCanvas operator must first add the exact group to
-its allowlist and start the guarded monitor. This setup is paused until a
-supported message source is available; do not post a binding code to a group.
+New groups are registered on the authenticated OverTree `/wechat` page. A user
+creates a group slot there; Cloud assigns a UUID and a unique visible name such
+as `OverTree-G-7K4Q2M`. Customer support creates the ordinary WeChat group,
+adds the Agent account, and sets the title to that exact name. The monitor
+refreshes the signed registry every 30 seconds and opens only that exact title.
+The user then selects that slot when generating a code. Cloud stores the slot
+UUID with the code, so a code pasted into any other registered group is
+rejected and remains usable in its intended group. Do not rename or reuse a
+registered title for another WeChat group. A user's groups and bindings remain
+isolated by Cloud account, group UUID, and per-group local state file.
 
-The ignored per-group direct-chat config needs these fields in addition to its
-normal local WeChat database and GUI settings:
+This registry flow is implemented in the checked-out Cloud and LabCanvas source,
+but the Cloud release has not been deployed. Until it is deployed and
+`WECHAT_OCR_GROUP_REMOTE_SYNC=true` is enabled on the Agent workstation, only
+the already configured `OvertreeAI 测试` pilot is available; new customer groups
+still require local registration.
 
-```json
-{
-  "chat_name": "Customer Coaching",
-  "chatroom_id": "<exact-chatroom-id>",
-  "self_wxid": "<operator-account-wxid>",
-  "state_path": "agentic_tools/wechat_gui_agent/.private/customer-coaching.state.json",
-  "send_target": {
-    "name": "Customer Coaching",
-    "expected_title": "Customer Coaching"
-  },
-  "personal_group_cloud": {
-    "enabled": true,
-    "trigger_prefixes": ["@你的微信昵称", "＠你的微信昵称"],
-    "support_member_sha256": [],
-    "timeout_seconds": 20,
-    "media_sync_timeout_seconds": 30
-  }
-}
+## GUI/OCR group ingress
+
+This opt-in ingress does not change direct chat, Android, WeCom, or local Agent
+monitors. The test profile already has a
+private config for the exact group `OvertreeAI 测试` at
+`/home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private/OvertreeAI-ocr-group.json`.
+Its local routing ID is derived from the title (`ocr-title-7fe7426e296e5304da64c1dc`);
+it is not a WeChat database/group ID. The scanner runs every three seconds in
+the isolated `overtree-wechat` desktop on `:97` and only forwards the newest
+visible line containing `@OverTree` or a standalone 8-character binding code.
+The `OvertreeAI 测试` pilot predates group registration and still uses its
+title-derived local routing ID; it has not been renamed or migrated.
+
+For manual developer testing only, a private local config can still be created
+without `--enable`. Customer-facing groups should use the Cloud group registry
+flow above, which avoids editing this local config list.
+
+```bash
+sudo -u overtree-wechat env HOME=/home/overtree-wechat \
+  WECHAT_AGENT_PRIVATE_DIR=/home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private \
+  WECHAT_AGENT_ENV_FILE=/home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private/wechat_supervisor.local.env \
+  python3 agentic_tools/wechat_gui_agent/scripts/wechat_ocr_group_config.py \
+  --group-name '固定测试群' --trigger '@OverTree'
 ```
 
-Do not copy the example values literally. The monitor requires the exact Agent
-`self_wxid` so its own group replies do not become new user requests. The GUI
-sender requires the exact expected group title and remains guarded by its
-existing visible-client/title checks. Keep one unique `state_path` per group;
-the adapter enforces that it is inside `.private`, records its owning group,
-and refuses to reuse it for another group.
-Set both `trigger_prefixes` to the exact visible name used when group members
-mention the Agent. Only messages containing that mention enter the Cloud
-session, regardless of which group member wrote them.
-Unrelated group conversation stays in WeChat. A one-time binding code is the
-only message accepted before the group is bound and may be sent without a
-mention.
+Run the same command again with `--enable`; this marks the private config
+active and sets `WECHAT_OCR_GROUP_ENABLED=true`. Keep
+`WECHAT_OCR_GROUP_REQUIRE_BADGE=0` and `WECHAT_OCR_DEDUP_SECONDS=900` for the
+first test. Then run one guarded pass:
 
-Start the existing direct monitor for that private group config using its
-normal `--loop --send` command. When the Cloud and local flags are false, the
-personal group path refuses to start; an enabled config with an unlisted group
-also fails closed. When enabled, that monitor sends all eligible human group
-messages to the bound Cloud session and does not run the LabCanvas local Agent
-for those messages. Every other configured chat keeps its existing local
-behavior.
+```bash
+sudo -u overtree-wechat env HOME=/home/overtree-wechat \
+  WECHAT_AGENT_PRIVATE_DIR=/home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private \
+  WECHAT_AGENT_ENV_FILE=/home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private/wechat_supervisor.local.env \
+  sh -c 'set -a; . "$WECHAT_AGENT_ENV_FILE"; set +a; exec python3 agentic_tools/wechat_gui_agent/scripts/wechat_ocr_group_ingress.py \
+  --configs /home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private/<group>-ocr-group.json \
+  --display :97 --once --send --json'
+```
 
-## Binding a group (future workflow; currently blocked)
+For Cloud-registered groups, set `WECHAT_OCR_GROUP_REMOTE_SYNC=true` in the
+private local environment and reload monitors after deploying the matching
+Cloud version. The loop discovers those registered titles itself. It opens
+only each configured exact title, OCRs the visible chat region,
+and forwards the newest line containing the configured `@OverTree` trigger or
+a standalone eight-character binding code. The same visible line is suppressed
+for 15 minutes by default (`WECHAT_OCR_DEDUP_SECONDS`); a changed line is
+eligible immediately. The unread red-marker option is a best-effort heuristic,
+not a title or identity check. Inbound images and files are intentionally not
+read in this first OCR path. Text replies from OCR groups click the visible
+bottom-right Send control in X desktop coordinates and verify that the draft
+cleared; this route does not require a native WeChat database receipt. Other
+WeChat text sends keep their existing native receipt verification. Cloud result
+files still use the existing guarded file-delivery path.
 
-Do not follow these steps while the message-reader blocker above remains. They
-describe the intended workflow after a supported ingress has been selected and
-validated.
+After Cloud registry sync is enabled, `wechat_agent_profile.sh reload-monitors`
+starts or reloads the `ocr-group` supervisor window. To roll back registry
+sync, set `WECHAT_OCR_GROUP_REMOTE_SYNC=false` and reload monitors. To stop all
+OCR groups, set `WECHAT_OCR_GROUP_ENABLED=false` and reload monitors. The
+ordinary monitors remain running.
 
-1. Create an ordinary WeChat group for the customer. Add the customer, your
-   operator account, and the support people who should be visible.
-2. Configure the exact group in LabCanvas: allowlist its group ID, set the
-   exact account and GUI title, give it a unique private state file, and start
-   the guarded monitor. Tell the customer when the group is ready for binding.
-3. In OverTree Cloud's `/wechat` page, choose the customer's project, the
-   intended existing session (or create a dedicated one), select **微信辅导群**,
-   choose its idle-disconnect period, and create a one-time link code. The
-   customer sends that code directly into the registered group without an @.
-   Customer Service remains a separate self-service entrance.
-4. Confirm that Cloud shows the selected project and session. Later, sending a
-   new code in this same group switches only this group to the new code's
-   selected project/session; messages and files for other groups stay isolated.
-   The switch discards pending local replies/results from the old session.
-5. Confirm that messages from two different group members and a result each
-   remain in that one Cloud session.
-6. Test a small image and file, duplicate/restarted message handling, a
-   temporary Cloud outage, and a send-title mismatch before enabling any real
-   customer group.
+Start the OCR supervisor window only after the one-shot check. When the Cloud
+and local flags are false, the personal group path refuses to start; an enabled
+config with an unlisted group also fails closed. When enabled, the OCR monitor
+sends only addressed text and binding codes to the bound Cloud session and does
+not run the LabCanvas local Agent for those messages. Every other configured
+chat keeps its existing local behavior.
+
+## Binding a group
+
+Follow these steps only after the OCR one-shot pass has validated the exact
+group title and Cloud route.
+
+1. In OverTree `/wechat`, select **个人微信辅导群** and create a dedicated
+   group name. Send that exact title to support.
+2. Support creates a normal WeChat group, adds the customer, support members,
+   and the Agent account, then sets the exact generated title. Keep it fixed.
+3. On `/wechat`, choose the registered group, project/session, and idle period;
+   generate a one-time code. Send that code only in this group. Cloud binds it
+   only to the group's UUID. Customer Service remains a separate entrance.
+4. The monitor discovers the registration on its next refresh, validates the
+   exact visible title, and replies with a binding confirmation. Later, a new
+   code for this same group switches only its project/session. Other groups'
+   messages, files, and session state remain isolated.
+5. Verify one addressed question and the returned text in the same group.
+   Inbound images/files are not part of this OCR version; Cloud-generated
+   result files still use the existing guarded file path.
 
 New personal-group bindings default to automatic disconnect after 24 hours
 without a Cloud conversation. The Cloud UI also offers 3 days, 7 days, or no
@@ -203,19 +239,26 @@ verification, or the personal account shows an abnormal-login warning.
 
 ## Current implementation boundary
 
-The LabCanvas direct monitor has an isolated Cloud dispatch branch, exact
-allowlist checks, HMAC-signed JSON and binary-upload calls, per-sender role
-labels, result polling, a durable retry outbox, and source-token-scoped media
-intake. Automated tests cover sender routing, attachment upload requests,
-binding-code recovery, result delivery, and refusal to route other groups. The
-planned inbound source is currently unavailable because its database-decryptor
-repository was DMCA-taken down; those tests do not prove a live personal-WeChat
-group can be read or safely automated.
+Cloud source now persists registered group slots, associates one-time codes
+with the selected slot UUID, and exposes the signed active-title registry only
+to the configured Agent account. LabCanvas source syncs those registrations,
+uses stable per-group state files, and keeps the legacy pilot config working.
+The Cloud registry release is not live yet. OCR text replies use visible
+Send-button delivery with composer-clear verification; native database
+receipts remain in use for other WeChat routes. Tests cover sender routing,
+receipt-free OCR delivery, group registry sync, group-scoped code checks, Cloud
+request signing, deduplication, and feature gating. OCR accuracy still depends
+on the installed WeChat theme, resolution, and configured crop region.
 
-This is not yet enabled or deployed for a real user group. The Cloud flag stays
-false until a separate test device, a real private route, and the acceptance
-checks above have been exercised with your personal WeChat account. We cannot
-verify group membership, media availability, Cloud firewall rules, or Tencent
-account status from this repository alone. The Enterprise WeChat Customer
-Service Gateway remains a separate self-service transport; do not point it at
-the personal group adapter or share its credentials/state with LabCanvas.
+The `OvertreeAI 测试` OCR loop is enabled and its selected project/session
+binding is active. On 2026-10-12 the binding confirmation was successfully sent:
+the visible sender returned `sent-visible`, the composer cleared, the
+confirmation was recognized in the sent screenshot, and the retry outbox became
+empty. Six stale invalid-code notices were removed from the private retry queue
+after a private state backup; they were not sent. No Agent question/result has
+yet been exercised end-to-end. The current OCR pilot does not read inbound
+images or files. We cannot verify group membership, media availability, Cloud
+firewall rules, or Tencent account status from this repository alone. The
+Enterprise WeChat Customer Service Gateway remains a separate self-service
+transport; do not point it at the personal group adapter or share its
+credentials/state with LabCanvas.

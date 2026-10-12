@@ -209,6 +209,32 @@ class PersonalGroupCloudTests(unittest.TestCase):
         self.assertNotIn("ABCD2345", request.full_url)
         self.assertTrue(result["switched"])
 
+    def test_registered_group_list_uses_the_signed_private_route(self):
+        captured = {}
+
+        def opener(request, timeout):
+            captured["request"] = request
+            return FakeResponse({"ok": True, "groups": [{"groupId": "group-1", "title": "OverTree-G-7K4Q2M"}]})
+
+        client = bridge.PersonalGroupCloudClient(
+            base_url="https://cloud.example",
+            secret="s" * 48,
+            agent_account_id="agent-1",
+            opener=opener,
+        )
+        result = client.list_registered_groups()
+        request = captured["request"]
+        parsed = urlsplit(request.full_url)
+        self.assertEqual(request.method, "GET")
+        self.assertEqual(parsed.path, "/internal/wechat/personal-groups/v1/groups")
+        self.assertEqual(parse_qs(parsed.query)["agentAccountId"], ["agent-1"])
+        self.assertEqual(result["groups"][0]["title"], "OverTree-G-7K4Q2M")
+        timestamp = request.get_header("X-overtree-wechat-timestamp")
+        nonce = request.get_header("X-overtree-wechat-nonce")
+        canonical = "\n".join(("GET", parsed.path + "?" + parsed.query, timestamp, nonce, hashlib.sha256(b"").hexdigest())).encode()
+        expected = __import__("base64").urlsafe_b64encode(hmac.new(b"s" * 48, canonical, hashlib.sha256).digest()).decode().rstrip("=")
+        self.assertEqual(request.get_header("X-overtree-wechat-signature"), expected)
+
     def test_submits_any_member_with_same_role_and_never_submits_agent_echo(self):
         client = FakeClient()
         support = self.row(7, "support-wxid", "@OverTree 补充一个背景")
@@ -372,6 +398,18 @@ class PersonalGroupCloudTests(unittest.TestCase):
         self.assertEqual(sent, [("result.pdf", b"pdf")])
         self.assertEqual(state["personal_group_cloud_outbox"], [])
         self.assertFalse(path.exists())
+
+    def test_ocr_uncertain_send_is_not_retried_after_backoff_or_reload(self):
+        state = {"personal_group_cloud_outbox": [{"id": "reply", "text": "result"}]}
+        sender = mock.Mock(side_effect=RuntimeError("WECHAT_GUI_SEND_UNCERTAIN: draft remains"))
+        config = {**self.config(), "ingress": "ocr_gui"}
+        bridge._flush_outbox(config, state, sender, 100)
+        reloaded = json.loads(json.dumps(state))
+        sent, error = bridge._flush_outbox(config, reloaded, sender, 1000)
+        self.assertIsNone(sent)
+        self.assertIn("review", error)
+        self.assertTrue(reloaded["personal_group_cloud_outbox"][0]["deliveryUncertain"])
+        self.assertEqual(sender.call_count, 1)
 
     def test_outgoing_send_failure_is_saved_for_retry(self):
         client = FakeClient(bound=False)

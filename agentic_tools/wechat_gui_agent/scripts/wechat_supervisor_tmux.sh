@@ -49,6 +49,11 @@ ANDROID_INGRESS_INTERVAL="${WECHAT_ANDROID_INGRESS_INTERVAL:-1}"
 ANDROID_INGRESS_SERIAL="${WECHAT_ANDROID_INGRESS_SERIAL:-$UNLOCK_ADB_SERIAL}"
 ANDROID_SCREEN_INGRESS="${WECHAT_ANDROID_SCREEN_INGRESS:-1}"
 ANDROID_SCREEN_INGRESS_INTERVAL="${WECHAT_ANDROID_SCREEN_INGRESS_INTERVAL:-4}"
+OCR_GROUP_ENABLED="${WECHAT_OCR_GROUP_ENABLED:-0}"
+OCR_GROUP_CONFIGS="${WECHAT_OCR_GROUP_CONFIGS:-}"
+OCR_GROUP_REMOTE_SYNC="${WECHAT_OCR_GROUP_REMOTE_SYNC:-0}"
+OCR_GROUP_INTERVAL="${WECHAT_OCR_GROUP_INTERVAL:-3}"
+OCR_GROUP_REQUIRE_BADGE="${WECHAT_OCR_GROUP_REQUIRE_BADGE:-0}"
 TINY11=0
 if PYTHONPATH="$ROOT/agentic_tools/wechat_gui_agent/scripts" python3 -c \
   'from wechat_transport_selection import tiny11_enabled; raise SystemExit(0 if tiny11_enabled() else 1)'; then
@@ -154,6 +159,11 @@ Environment:
   WECHAT_ANDROID_INGRESS_SERIAL    optional device serial; defaults to unlock-watchdog serial
   WECHAT_ANDROID_SCREEN_INGRESS    1 to recover self-authored text from physical display 0
   WECHAT_ANDROID_SCREEN_INGRESS_INTERVAL  passive screen poll interval, default 4 seconds
+  WECHAT_OCR_GROUP_ENABLED  1 to enable the opt-in GUI/OCR personal-group ingress, default 0
+  WECHAT_OCR_GROUP_CONFIGS  comma-separated private OCR group configs
+  WECHAT_OCR_GROUP_REMOTE_SYNC  1 to sync registered group names from OverTree Cloud
+  WECHAT_OCR_GROUP_INTERVAL  OCR group scan interval, default 3 seconds
+  WECHAT_OCR_GROUP_REQUIRE_BADGE  1 to require a visible unread red marker before opening a group
   WECHAT_WORKER_COUNT         parallel queue workers, default 2
   WECHAT_LOG_MAINTENANCE      1 to cap generated logs/evidence, default 1
   WECHAT_LOG_MAINTENANCE_INTERVAL  retention pass interval, default 300 seconds
@@ -289,6 +299,16 @@ android_screen_ingress_command() {
   printf ">> %q 2>&1" "$LOG_DIR/supervisor-android-screen-ingress.log"
 }
 
+ocr_group_command() {
+  local args=(python3 -u agentic_tools/wechat_gui_agent/scripts/wechat_ocr_group_ingress.py --configs "$OCR_GROUP_CONFIGS" --display "$WECHAT_DISPLAY" --interval "$OCR_GROUP_INTERVAL" --loop --send)
+  if [[ "$OCR_GROUP_REQUIRE_BADGE" != "0" ]]; then
+    args+=(--require-unread-badge)
+  fi
+  printf "cd %q && agentic_tools/wechat_gui_agent/scripts/wechat_restart_loop.sh ocr-group " "$ROOT"
+  printf "%q " "${args[@]}"
+  printf ">> %q 2>&1" "$LOG_DIR/supervisor-ocr-group.log"
+}
+
 log_maintenance_command() {
   printf "cd %q && python3 -u agentic_tools/wechat_gui_agent/scripts/wechat_output_retention.py --root %q --extra-root %q --max-log-mib %q --keep-log-mib %q --log-retention-days %q --interval %q --loop" \
     "$ROOT" "$ROOT/output/wechat_gui_agent" "$ROOT/output/wecom" "$LOG_MAX_MIB" "$LOG_KEEP_MIB" "$LOG_RETENTION_DAYS" "$LOG_MAINTENANCE_INTERVAL"
@@ -377,6 +397,9 @@ ensure_runtime_windows() {
   if [[ "$ANDROID_SCREEN_INGRESS" != "0" ]]; then
     start_missing_window android-screen-ingress "$(android_screen_ingress_command)"
   fi
+  if [[ "$OCR_GROUP_ENABLED" != "0" && ( -n "$OCR_GROUP_CONFIGS" || "$OCR_GROUP_REMOTE_SYNC" != "0" ) ]]; then
+    start_missing_window ocr-group "$(ocr_group_command)"
+  fi
   if [[ "$LOG_MAINTENANCE" != "0" ]]; then
     start_missing_window log-maintenance "$(log_maintenance_command)"
   fi
@@ -442,6 +465,9 @@ reload_worker_windows() {
   if [[ "$ANDROID_SCREEN_INGRESS" != "0" ]]; then
     start_missing_window android-screen-ingress "$(android_screen_ingress_command)"
   fi
+  if [[ "$OCR_GROUP_ENABLED" != "0" && ( -n "$OCR_GROUP_CONFIGS" || "$OCR_GROUP_REMOTE_SYNC" != "0" ) ]]; then
+    respawn_or_new_window "ocr-group" "$(ocr_group_command)"
+  fi
   if [[ "$LOG_MAINTENANCE" != "0" ]]; then
     start_missing_window log-maintenance "$(log_maintenance_command)"
   fi
@@ -473,6 +499,9 @@ reload_monitor_windows() {
   fi
   if [[ "$ANDROID_SCREEN_INGRESS" != "0" ]]; then
     respawn_or_new_window "android-screen-ingress" "$(android_screen_ingress_command)"
+  fi
+  if [[ "$OCR_GROUP_ENABLED" != "0" && ( -n "$OCR_GROUP_CONFIGS" || "$OCR_GROUP_REMOTE_SYNC" != "0" ) ]]; then
+    respawn_or_new_window "ocr-group" "$(ocr_group_command)"
   fi
   if [[ "$LOG_MAINTENANCE" != "0" ]]; then
     start_missing_window log-maintenance "$(log_maintenance_command)"
@@ -534,6 +563,9 @@ case "$action" in
     fi
     if [[ "$ANDROID_SCREEN_INGRESS" != "0" ]]; then
       tmux new-window -t "$SESSION" -n android-screen-ingress "$(android_screen_ingress_command)"
+    fi
+    if [[ "$OCR_GROUP_ENABLED" != "0" && ( -n "$OCR_GROUP_CONFIGS" || "$OCR_GROUP_REMOTE_SYNC" != "0" ) ]]; then
+      tmux new-window -t "$SESSION" -n ocr-group "$(ocr_group_command)"
     fi
     if [[ "$LOG_MAINTENANCE" != "0" ]]; then
       tmux new-window -t "$SESSION" -n log-maintenance "$(log_maintenance_command)"

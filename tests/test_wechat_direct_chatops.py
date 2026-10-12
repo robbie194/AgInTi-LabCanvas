@@ -4606,6 +4606,31 @@ class WeChatDirectChatopsPolicyTests(unittest.TestCase):
         self.assertEqual(kwargs["env"]["WECHAT_INITIAL_TITLE_WAIT"], "0.8")
         self.assertEqual(kwargs["env"]["WECHAT_TITLE_RETRY_SECONDS"], "8.0")
 
+    def test_ocr_visual_send_flag_is_opt_in_and_reaches_gui_sender(self) -> None:
+        calls: list[list[str]] = []
+        original_run = direct_chatops.run_subprocess_group
+        original_lock_busy = direct_chatops.gui_send_lock_busy
+        try:
+            direct_chatops.gui_send_lock_busy = lambda: False  # type: ignore[assignment]
+            direct_chatops.run_subprocess_group = lambda command, **_kwargs: (
+                calls.append(command) or subprocess.CompletedProcess(command, 0, "{\"results\":[]}", "")
+            )  # type: ignore[assignment]
+            direct_chatops.send_gui_message(
+                {
+                    "chat_name": "OvertreeAI 测试",
+                    "display": ":97",
+                    "send_target": {"name": "OvertreeAI 测试", "query": "OvertreeAI 测试", "expected_title": "OvertreeAI 测试"},
+                    "_visual_only_send": True,
+                },
+                "确认消息",
+            )
+        finally:
+            direct_chatops.run_subprocess_group = original_run  # type: ignore[assignment]
+            direct_chatops.gui_send_lock_busy = original_lock_busy  # type: ignore[assignment]
+
+        self.assertEqual(len(calls), 1)
+        self.assertIn("--visual-only-send", calls[0])
+
     def test_send_gui_message_retries_transient_failure(self) -> None:
         calls: list[dict[str, object]] = []
         original_run = direct_chatops.run_subprocess_group
