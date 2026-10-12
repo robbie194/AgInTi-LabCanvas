@@ -159,7 +159,7 @@ class WeChatGuiSendTests(unittest.TestCase):
                 mock.patch.object(module, "screenshot", side_effect=fake_screenshot),
                 mock.patch.object(module, "detect_wechat_locked", side_effect=fake_lock),
                 mock.patch.object(module, "clear_composer"),
-                mock.patch.object(module, "click"),
+                mock.patch.object(module, "click") as click,
                 mock.patch.object(
                     module,
                     "wait_for_verified_file_chooser",
@@ -190,6 +190,7 @@ class WeChatGuiSendTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "sent-file-submitted")
         self.assertEqual(result["filename"], "report.pdf")
+        self.assertEqual(click.call_args_list[0].args[1:], (456, 666))
         self.assertEqual(
             lock_checks,
             [

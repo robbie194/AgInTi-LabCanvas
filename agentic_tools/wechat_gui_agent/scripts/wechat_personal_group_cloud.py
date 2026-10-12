@@ -383,7 +383,16 @@ def _download_artifact(config: dict[str, Any], artifact: dict[str, Any]) -> Path
     except PersonalGroupCloudError:
         temporary.unlink(missing_ok=True)
         raise
-    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+    except HTTPError as exc:
+        temporary.unlink(missing_ok=True)
+        if int(exc.code or 0) in {404, 410}:
+            raise PersonalGroupCloudError(
+                "Cloud artifact link expired or is no longer available.",
+                status_code=int(exc.code),
+                retryable=False,
+            ) from exc
+        raise PersonalGroupCloudError("Could not download the Cloud artifact for WeChat delivery.", retryable=True) from exc
+    except (URLError, TimeoutError, OSError) as exc:
         temporary.unlink(missing_ok=True)
         raise PersonalGroupCloudError("Could not download the Cloud artifact for WeChat delivery.", retryable=True) from exc
 
@@ -415,6 +424,27 @@ def _flush_outbox(config: dict[str, Any], state: dict[str, Any], send_text: Call
                 artifact_path.unlink(missing_ok=True)
         else:
             _send(send_text, config, state, str(item.get("text") or ""), item.get("sourceRow") or {}, kind)
+    except PersonalGroupCloudError as exc:
+        if kind == "file" and exc.status_code in {404, 410}:
+            outbox.pop(0)
+            artifact = item.get("artifact") if isinstance(item.get("artifact"), dict) else {}
+            name = _artifact_path(artifact.get("name") or item.get("text") or "结果文件")
+            _enqueue_outgoing(
+                state,
+                f"文件“{name}”暂时无法发送，请在 OverTree 项目文件区查看。",
+                item.get("sourceRow") or {},
+                "file-warning",
+                result_id=str(item.get("resultId") or ""),
+            )
+            return None, None
+        attempts = int(item.get("attempts") or 0) + 1
+        item["attempts"] = attempts
+        item["lastError"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+        if config.get("ingress") == "ocr_gui" and "WECHAT_GUI_SEND_UNCERTAIN" in str(exc):
+            item["deliveryUncertain"] = True
+        item["nextAttemptAt"] = now + min(300, 2 ** min(attempts, 8))
+        item.pop("sendingAt", None)
+        return None, item["lastError"]
     except Exception as exc:
         attempts = int(item.get("attempts") or 0) + 1
         item["attempts"] = attempts

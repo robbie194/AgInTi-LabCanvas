@@ -504,6 +504,34 @@ class PersonalGroupCloudTests(unittest.TestCase):
         self.assertEqual(state["personal_group_cloud_outbox"], [])
         self.assertFalse(path.exists())
 
+    def test_permanently_missing_cloud_artifact_does_not_block_following_outbox_items(self):
+        state = {"personal_group_cloud_outbox": [{
+            "id": "artifact-1",
+            "kind": "file",
+            "text": "文件：old.png",
+            "artifact": {"url": "https://cloud.example/wechat/files/old", "name": "old.png"},
+            "sourceRow": {},
+        }, {
+            "id": "reply-1",
+            "kind": "result",
+            "text": "结果文字",
+            "sourceRow": {},
+        }]}
+        with mock.patch.object(
+            bridge,
+            "_download_artifact",
+            side_effect=bridge.PersonalGroupCloudError("expired", status_code=404),
+        ):
+            sent, error = bridge._flush_outbox(
+                self.config(), state, lambda *_args: None, time.time(), send_file=lambda *_args: None
+            )
+
+        self.assertIsNone(sent)
+        self.assertIsNone(error)
+        self.assertEqual(len(state["personal_group_cloud_outbox"]), 2)
+        self.assertEqual(state["personal_group_cloud_outbox"][0]["id"], "reply-1")
+        self.assertIn("old.png", state["personal_group_cloud_outbox"][1]["text"])
+
     def test_ocr_uncertain_send_is_not_retried_after_backoff_or_reload(self):
         state = {"personal_group_cloud_outbox": [{"id": "reply", "text": "result"}]}
         sender = mock.Mock(side_effect=RuntimeError("WECHAT_GUI_SEND_UNCERTAIN: draft remains"))
