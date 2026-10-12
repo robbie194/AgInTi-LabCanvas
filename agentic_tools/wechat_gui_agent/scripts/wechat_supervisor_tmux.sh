@@ -303,13 +303,11 @@ android_screen_ingress_command() {
 }
 
 ocr_group_command() {
-  local args=(python3 -u agentic_tools/wechat_gui_agent/scripts/wechat_ocr_group_ingress.py --configs "$OCR_GROUP_CONFIGS" --display "$WECHAT_DISPLAY" --interval "$OCR_GROUP_INTERVAL" --active-rescan-seconds "$OCR_GROUP_ACTIVE_RESCAN_SECONDS" --loop --send)
-  if [[ "$OCR_GROUP_REQUIRE_BADGE" != "0" ]]; then
-    args+=(--require-unread-badge)
-  fi
-  printf "cd %q && agentic_tools/wechat_gui_agent/scripts/wechat_restart_loop.sh ocr-group " "$ROOT"
-  printf "%q " "${args[@]}"
-  printf ">> %q 2>&1" "$LOG_DIR/supervisor-ocr-group.log"
+  # tmux starts child panes from the server environment, which may not include
+  # the Agent profile's private paths and Cloud registry settings. The runner
+  # reloads the private env file in the pane before starting OCR ingress.
+  printf "cd %q && agentic_tools/wechat_gui_agent/scripts/wechat_ocr_group_runner.sh >> %q 2>&1" \
+    "$ROOT" "$LOG_DIR/supervisor-ocr-group.log"
 }
 
 log_maintenance_command() {
