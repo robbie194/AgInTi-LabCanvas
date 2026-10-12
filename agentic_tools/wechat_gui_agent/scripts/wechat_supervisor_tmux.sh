@@ -306,8 +306,8 @@ ocr_group_command() {
   # tmux starts child panes from the server environment, which may not include
   # the Agent profile's private paths and Cloud registry settings. The runner
   # reloads the private env file in the pane before starting OCR ingress.
-  printf "cd %q && agentic_tools/wechat_gui_agent/scripts/wechat_ocr_group_runner.sh >> %q 2>&1" \
-    "$ROOT" "$LOG_DIR/supervisor-ocr-group.log"
+  printf "cd %q && agentic_tools/wechat_gui_agent/scripts/wechat_ocr_group_runner.sh --env-file %q >> %q 2>&1" \
+    "$ROOT" "$PRIVATE_ENV" "$LOG_DIR/supervisor-ocr-group.log"
 }
 
 log_maintenance_command() {

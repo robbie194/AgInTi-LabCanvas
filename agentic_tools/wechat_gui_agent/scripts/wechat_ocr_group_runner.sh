@@ -8,6 +8,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 PROFILE_HOME="${WECHAT_AGENT_HOME:-${HOME:-}/.local/share/overtree-wechat}"
 PRIVATE_DIR="${WECHAT_AGENT_PRIVATE_DIR:-$PROFILE_HOME/labcanvas-private}"
 ENV_FILE="${WECHAT_AGENT_ENV_FILE:-$PRIVATE_DIR/wechat_supervisor.local.env}"
+if [[ "${1:-}" == "--env-file" ]]; then
+  if [[ $# -lt 2 ]]; then
+    echo "--env-file requires a path" >&2
+    exit 2
+  fi
+  ENV_FILE="$2"
+  shift 2
+fi
 
 if [[ -r "$ENV_FILE" ]]; then
   set -a
