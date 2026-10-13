@@ -28,6 +28,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 LINK_CODE_RE = re.compile(r"^(?:绑定\s*)?([A-HJ-NP-Z2-9]{8})$", re.IGNORECASE)
 MAX_PENDING = 100
 MAX_ATTACHMENTS = 10
+MAX_OUTBOUND_ATTEMPTS = 4  # One initial attempt plus at most three retries.
 WECHAT_DELIVERY_PLAN_V1_LIMITS = {
     "maxTextBytes": 1800,
     "maxMessages": 5,
@@ -398,6 +399,62 @@ def _download_artifact(config: dict[str, Any], artifact: dict[str, Any]) -> Path
         raise PersonalGroupCloudError("Could not download the Cloud artifact for WeChat delivery.", retryable=True) from exc
 
 
+def _delivery_failure_notice(item: dict[str, Any], reason: str) -> str:
+    kind = str(item.get("kind") or "reply")
+    if reason == "uncertain":
+        return "一条微信消息的发送状态无法确认，系统已停止重发以避免重复。若未看到完整结果，请重新提问。"
+    if kind == "ack":
+        return "任务确认消息连续发送失败，已放弃重发；任务仍会继续处理。若未收到结果，请重新提问。"
+    if kind == "file":
+        artifact = item.get("artifact") if isinstance(item.get("artifact"), dict) else {}
+        name = _artifact_path(artifact.get("name") or "结果文件")
+        return f"结果文件“{name}”连续发送失败，已放弃重发；请在 OverTree 项目文件区查看，或重新提问。"
+    return "一条结果消息连续发送失败，已放弃重发。请重新提问。"
+
+
+def _abandon_outbox_item(config: dict[str, Any], state: dict[str, Any], item: dict[str, Any], *,
+                         now: float, reason: str, error: str) -> str:
+    outbox = state.setdefault("personal_group_cloud_outbox", [])
+    if outbox and outbox[0] is item:
+        outbox.pop(0)
+    else:
+        outbox[:] = [queued for queued in outbox if queued is not item]
+
+    item_id = str(item.get("id") or "unknown")
+    kind = str(item.get("kind") or "reply")
+    attempts = int(item.get("attempts") or 0)
+    failures = state.setdefault("personal_group_cloud_delivery_failures", [])
+    if not isinstance(failures, list):
+        failures = []
+        state["personal_group_cloud_delivery_failures"] = failures
+    failures.append({
+        "id": item_id,
+        "kind": kind,
+        "resultId": str(item.get("resultId") or ""),
+        "attempts": attempts,
+        "reason": reason,
+        "error": str(error or "")[:300],
+        "abandonedAt": int(now),
+    })
+    del failures[:-20]
+
+    # Queue the explanation after existing result parts. It also follows the
+    # bounded retry policy, so even a failed notice cannot block the queue.
+    if kind != "delivery-failure-notice":
+        notice_id = "delivery-failure-" + hashlib.sha256(item_id.encode("utf-8")).hexdigest()[:24]
+        _enqueue_outgoing(
+            state,
+            _delivery_failure_notice(item, reason),
+            item.get("sourceRow") if isinstance(item.get("sourceRow"), dict) else {},
+            "delivery-failure-notice",
+            message_id=notice_id,
+            result_id=str(item.get("resultId") or ""),
+        )
+
+    _persist_local_state(config, state)
+    return f"Outbound {kind} item {item_id} abandoned after {attempts} attempt(s): {error or reason}"
+
+
 def _flush_outbox(config: dict[str, Any], state: dict[str, Any], send_text: Callable[..., Any], now: float,
                   send_file: Callable[..., Any] | None = None) -> tuple[str | None, str | None]:
     outbox = state.setdefault("personal_group_cloud_outbox", [])
@@ -405,11 +462,19 @@ def _flush_outbox(config: dict[str, Any], state: dict[str, Any], send_text: Call
         return None, None
     item = outbox[0]
     if item.get("deliveryUncertain"):
-        return None, "OCR delivery requires review before retry."
-    if float(item.get("nextAttemptAt") or 0) > now:
-        return None, None
+        return None, _abandon_outbox_item(
+            config, state, item, now=now, reason="uncertain",
+            error="OCR send outcome was uncertain; automatic retry is unsafe.",
+        )
     sending_at = float(item.get("sendingAt") or 0)
     if sending_at and now - sending_at < 45:
+        return None, None
+    if int(item.get("attempts") or 0) >= MAX_OUTBOUND_ATTEMPTS:
+        return None, _abandon_outbox_item(
+            config, state, item, now=now, reason="retry_limit",
+            error=str(item.get("lastError") or "retry limit already reached"),
+        )
+    if float(item.get("nextAttemptAt") or 0) > now:
         return None, None
     item["sendingAt"] = now
     _persist_local_state(config, state)
@@ -439,14 +504,23 @@ def _flush_outbox(config: dict[str, Any], state: dict[str, Any], send_text: Call
                 result_id=str(item.get("resultId") or ""),
                 related_artifact_id=str(item.get("id") or ""),
             )
+            _persist_local_state(config, state)
             return None, None
         attempts = int(item.get("attempts") or 0) + 1
         item["attempts"] = attempts
         item["lastError"] = f"{type(exc).__name__}: {str(exc)[:300]}"
         if config.get("ingress") == "ocr_gui" and "WECHAT_GUI_SEND_UNCERTAIN" in str(exc):
             item["deliveryUncertain"] = True
-        item["nextAttemptAt"] = now + min(300, 2 ** min(attempts, 8))
         item.pop("sendingAt", None)
+        if item.get("deliveryUncertain"):
+            return None, _abandon_outbox_item(
+                config, state, item, now=now, reason="uncertain", error=item["lastError"]
+            )
+        if attempts >= MAX_OUTBOUND_ATTEMPTS:
+            return None, _abandon_outbox_item(
+                config, state, item, now=now, reason="retry_limit", error=item["lastError"]
+            )
+        item["nextAttemptAt"] = now + min(300, 2 ** min(attempts, 8))
         return None, item["lastError"]
     except Exception as exc:
         attempts = int(item.get("attempts") or 0) + 1
@@ -454,8 +528,16 @@ def _flush_outbox(config: dict[str, Any], state: dict[str, Any], send_text: Call
         item["lastError"] = f"{type(exc).__name__}: {str(exc)[:300]}"
         if config.get("ingress") == "ocr_gui" and "WECHAT_GUI_SEND_UNCERTAIN" in str(exc):
             item["deliveryUncertain"] = True
-        item["nextAttemptAt"] = now + min(300, 2 ** min(attempts, 8))
         item.pop("sendingAt", None)
+        if item.get("deliveryUncertain"):
+            return None, _abandon_outbox_item(
+                config, state, item, now=now, reason="uncertain", error=item["lastError"]
+            )
+        if attempts >= MAX_OUTBOUND_ATTEMPTS:
+            return None, _abandon_outbox_item(
+                config, state, item, now=now, reason="retry_limit", error=item["lastError"]
+            )
+        item["nextAttemptAt"] = now + min(300, 2 ** min(attempts, 8))
         return None, item["lastError"]
     outbox.pop(0)
     if kind == "file":

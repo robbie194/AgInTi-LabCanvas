@@ -102,6 +102,10 @@ GUI sender. If an expired artifact later succeeds on retry, the adapter removes
 that artifact's queued failure notice by its stable ID; notices for other failed
 files remain visible. These shared-plan changes are in source but are not
 deployed to production yet.
+Group outbox messages get one initial send plus three retries; an exhausted or
+uncertain item is recorded as a delivery error and removed so it cannot block
+later result text or media. A concise best-effort failure notice follows the
+queued result, and the user can resubmit if a message was missed.
 
 The adapter calls Cloud's separate HMAC-signed
 `/internal/wechat/personal-groups/v1/*` routes over a private VPN or SSH tunnel;

@@ -93,9 +93,13 @@ The enabled branch must route only to the isolated Cloud personal-group HMAC
 namespace and must not fall through to the local Agent, WeCom, or Customer
 Service route. Keep Cloud `/internal/*` private behind VPN/SSH access. Media
 intake must use tokens from the exact message and reject mtime-only or nearby
-file matches. Preserve failed outbound sends in the per-group state outbox;
-keep binding-code recovery idempotent so a committed Cloud claim is never
-forwarded into the customer's conversation after a lost response. This uses
+file matches. Persist outbound retry state in the per-group outbox, but bound
+each item to one initial send plus three retries. On exhaustion, remove only
+that item, record its failure in private state, report it in monitor output,
+and queue a best-effort notice after already queued result parts. A failed
+notice follows the same bound. Keep binding-code recovery idempotent so a
+committed Cloud claim is never forwarded into the customer's conversation
+after a lost response. This uses
 the operator's personal WeChat account and is not an official Tencent bot API;
 do not promise zero account risk. See the
 [local Agent profile guide](../../../docs/WECHAT_PERSONAL_GROUP_LOCAL_PROFILE.md).
@@ -131,8 +135,11 @@ For OCR-only groups, synthetic visible-text rows have no native WeChat message
 database receipt. Route only `ingress=ocr_gui` text replies through the
 receipt-free visual sender: click the guarded chat's visible Send control using
 X desktop coordinates, then verify the composer is empty. If the composer still
-contains text, record an uncertain send and stop automatic retry to avoid a
-duplicate. Other personal-WeChat sends retain native receipt verification.
+contains text, record an uncertain send, stop automatic retry to avoid a
+duplicate, move it to the private delivery-failure history, and let the active
+outbox continue. The monitor reports failed sends; a best-effort notice asks
+the user to retry if needed. Other personal-WeChat sends retain native receipt
+verification.
 noVNC scaling changes only the browser viewport; it does not change the X display
 coordinates used by the sender. Keep the OCR route behind its existing explicit
 group config and feature flags.

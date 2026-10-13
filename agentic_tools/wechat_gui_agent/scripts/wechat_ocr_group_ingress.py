@@ -460,8 +460,10 @@ def scan_group(
         state["ocr_last_text"] = extracted[:500]
         state["ocr_last_at"] = int(time.time())
     save_state(state_path, result.get("state") or state)
+    metrics = result.get("metrics") or {}
+    delivery_error = str(metrics.get("send_error") or "")
     return {
-        "ok": True,
+        "ok": not bool(delivery_error),
         "chat": chat_name,
         "opened": opened,
         "text_detected": bool(extracted),
@@ -469,7 +471,8 @@ def scan_group(
         "seeded": seeded,
         "submitted": bool(result.get("task_enqueued")),
         "response_sent": bool(result.get("response_sent")),
-        "metrics": result.get("metrics") or {},
+        "metrics": metrics,
+        **({"error": delivery_error} if delivery_error else {}),
     }
 
 

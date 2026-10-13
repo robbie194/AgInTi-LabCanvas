@@ -463,6 +463,34 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         self.assertEqual(poll_cloud.call_args.args[2], [])
         require_tools.assert_not_called()
 
+    def test_exhausted_outbound_send_is_reported_as_monitor_error(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            private = Path(tmp) / "private"
+            private.mkdir()
+            module.PRIVATE = private
+            config = {
+                "enabled": True,
+                "ingress": "ocr_gui",
+                "chat_name": "OvertreeAI 测试",
+                "chatroom_id": "ocr-title-test",
+                "state_path": str(private / "group.state.json"),
+                "send_target": {"name": "OvertreeAI 测试", "expected_title": "OvertreeAI 测试"},
+                "personal_group_cloud": {"enabled": True, "trigger_prefixes": ["@OverTree"]},
+            }
+            args = type("Args", (), {"display": ":97", "require_unread_badge": False})()
+            failure = "Outbound ack item ack-1 abandoned after 4 attempt(s): GUI unavailable"
+
+            with mock.patch.object(module, "run_cloud_once", return_value={
+                "state": {"personal_group_cloud_delivery_failures": [{"id": "ack-1"}]},
+                "metrics": {"send_error": failure, "outbox": 2},
+            }):
+                result = module.scan_group(args, config, private / "group.json", scan_gui=False)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], failure)
+        self.assertEqual(result["metrics"]["outbox"], 2)
+
     def test_passive_screen_failure_still_polls_cloud_without_gui_scan(self):
         module = load_module()
         with tempfile.TemporaryDirectory() as tmp:

@@ -564,17 +564,77 @@ class PersonalGroupCloudTests(unittest.TestCase):
         self.assertIn("old.png", state["personal_group_cloud_outbox"][1]["text"])
         self.assertEqual(state["personal_group_cloud_outbox"][1]["relatedArtifactId"], "artifact-1")
 
-    def test_ocr_uncertain_send_is_not_retried_after_backoff_or_reload(self):
-        state = {"personal_group_cloud_outbox": [{"id": "reply", "text": "result"}]}
+    def test_ocr_uncertain_send_is_abandoned_without_blocking_following_items(self):
+        state = {"personal_group_cloud_outbox": [
+            {"id": "ack", "kind": "ack", "text": "received"},
+            {"id": "result", "kind": "result", "text": "result"},
+        ]}
         sender = mock.Mock(side_effect=RuntimeError("WECHAT_GUI_SEND_UNCERTAIN: draft remains"))
         config = {**self.config(), "ingress": "ocr_gui"}
-        bridge._flush_outbox(config, state, sender, 100)
-        reloaded = json.loads(json.dumps(state))
-        sent, error = bridge._flush_outbox(config, reloaded, sender, 1000)
+        sent, error = bridge._flush_outbox(config, state, sender, 100)
         self.assertIsNone(sent)
-        self.assertIn("review", error)
-        self.assertTrue(reloaded["personal_group_cloud_outbox"][0]["deliveryUncertain"])
+        self.assertIn("abandoned", error)
+        self.assertEqual(state["personal_group_cloud_outbox"][0]["id"], "result")
+        self.assertEqual(state["personal_group_cloud_outbox"][-1]["kind"], "delivery-failure-notice")
+        sent, error = bridge._flush_outbox(config, state, lambda *_args: None, 101)
+        self.assertEqual((sent, error), ("result", None))
         self.assertEqual(sender.call_count, 1)
+
+    def test_exhausted_legacy_ack_is_discarded_before_its_future_backoff_and_results_continue(self):
+        state = {"personal_group_cloud_outbox": [{
+            "id": "ack-old",
+            "kind": "ack",
+            "text": "received",
+            "attempts": 71,
+            "nextAttemptAt": 10000,
+            "lastError": "RuntimeError: GUI unavailable",
+        }, {
+            "id": "result-text",
+            "kind": "result",
+            "text": "OverTree result",
+        }, {
+            "id": "result-image",
+            "kind": "file",
+            "text": "file: plot.png",
+            "artifact": {"url": "https://cloud.example/wechat/files/image", "name": "plot.png", "maxBytes": 100},
+        }]}
+        send_text = mock.Mock()
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "plot.png"
+            image.write_bytes(b"png")
+            with mock.patch.object(bridge, "_download_artifact", return_value=image):
+                sent, error = bridge._flush_outbox(self.config(), state, send_text, 100)
+                self.assertIsNone(sent)
+                self.assertIn("ack-old", error)
+                self.assertEqual(state["personal_group_cloud_delivery_failures"][0]["attempts"], 71)
+                self.assertEqual(state["personal_group_cloud_outbox"][0]["id"], "result-text")
+
+                sent, error = bridge._flush_outbox(self.config(), state, send_text, 101)
+                self.assertEqual((sent, error), ("OverTree result", None))
+                sent, error = bridge._flush_outbox(
+                    self.config(), state, send_text, 102,
+                    send_file=lambda _config, path: self.assertEqual(path.read_bytes(), b"png"),
+                )
+
+        self.assertEqual((sent, error), ("file: plot.png", None))
+        self.assertEqual([call.args[1] for call in send_text.call_args_list], ["OverTree result"])
+        self.assertEqual(state["personal_group_cloud_outbox"][-1]["kind"], "delivery-failure-notice")
+
+    def test_fourth_failed_send_is_abandoned_and_reported(self):
+        state = {"personal_group_cloud_outbox": [{
+            "id": "result-1",
+            "kind": "result",
+            "text": "OverTree result",
+            "attempts": 3,
+        }]}
+        sender = mock.Mock(side_effect=RuntimeError("GUI unavailable"))
+        sent, error = bridge._flush_outbox(self.config(), state, sender, 100)
+
+        self.assertIsNone(sent)
+        self.assertIn("abandoned after 4 attempt(s)", error)
+        self.assertEqual(sender.call_count, 1)
+        self.assertEqual(state["personal_group_cloud_delivery_failures"][0]["reason"], "retry_limit")
+        self.assertEqual(state["personal_group_cloud_outbox"][0]["kind"], "delivery-failure-notice")
 
     def test_outgoing_send_failure_is_saved_for_retry(self):
         client = FakeClient(bound=False)
