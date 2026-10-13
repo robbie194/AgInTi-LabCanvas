@@ -154,8 +154,10 @@ default) starts an active pass. Empty-screen Cloud polls still reconcile
 already-submitted tasks and the reply outbox without taking over the chat UI.
 For registered groups, pass the group's `allow_search` setting through to the
 GUI locator so it can find an exact generated title that is not in the visible
-chat list. WeChat's global-search surface remains disabled unless the operator
-sets `WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH=1`; the exact configured title guard
+chat list. The OCR monitor may temporarily satisfy the locator's global-search
+gate only when the Cloud-registered group ID and generated title agree; this
+scope ends after that one lookup. Other targets still require the operator to
+set `WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH=1`. The exact configured title guard
 must pass before OCR reads the selected conversation, and a failed title check
 stops that scan.
 Read Tesseract TSV as unquoted fields: OCR may return a literal unmatched

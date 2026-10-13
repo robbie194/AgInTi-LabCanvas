@@ -564,6 +564,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
                 "ingress": "ocr_gui",
                 "chat_name": "OverTree-G-RMQG7F",
                 "chatroom_id": "7e3e4567-e89b-42d3-a456-426614174000",
+                "group_registration_id": "7e3e4567-e89b-42d3-a456-426614174000",
                 "state_path": str(private / "group.state.json"),
                 "send_target": {
                     "name": "OverTree-G-RMQG7F",
@@ -575,25 +576,55 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
             }
             args = type("Args", (), {"display": ":97", "require_unread_badge": False})()
             window = type("Window", (), {"x": 0, "y": 0, "width": 916, "height": 700})()
+            global_search_at_open = []
+            def reject_opened_target(*_args, **_kwargs):
+                global_search_at_open.append((
+                    os.environ.get("WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH"),
+                    module.gui.global_search_allowed(True, module.gui.target_from_raw(config["send_target"])),
+                ))
+                return {
+                    "ok": False,
+                    "method": "search_disabled",
+                    "search_disabled": True,
+                }
 
-            with mock.patch.object(module.gui, "require_tools"), \
+            with mock.patch.dict(os.environ, {}, clear=True), \
+                 mock.patch.object(module.gui, "require_tools"), \
                  mock.patch.object(module.gui, "wait_for_main_wechat_window", return_value=window), \
-                 mock.patch.object(module.gui, "open_target", return_value={
-                     "ok": False,
-                     "method": "search_disabled",
-                     "search_disabled": True,
-                 }) as open_target, \
+                 mock.patch.object(module.gui, "open_target", side_effect=reject_opened_target) as open_target, \
                  mock.patch.object(module, "ocr_triggered_message") as extract_message, \
                  mock.patch.object(module, "run_cloud_once") as poll_cloud:
                 result = module.scan_group(args, config, private / "group.json", scan_gui=True)
+                search_setting_restored = os.environ.get("WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH")
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["status"], "title_guard_failed")
         self.assertTrue(open_target.call_args.kwargs["allow_search"])
+        self.assertEqual(global_search_at_open, [("1", True)])
         self.assertFalse(open_target.call_args.kwargs["skip_title_guard"])
         self.assertTrue(open_target.call_args.kwargs["fail_closed_after_visible_match"])
         extract_message.assert_not_called()
         poll_cloud.assert_not_called()
+        self.assertIsNone(search_setting_restored)
+
+    def test_unregistered_group_does_not_receive_scoped_search_opt_in(self):
+        module = load_module()
+        target = module.gui.target_from_raw({
+            "name": "OverTree-G-RMQG7F",
+            "query": "OverTree-G-RMQG7F",
+            "expected_title": "OverTree-G-RMQG7F",
+            "allow_search": True,
+        })
+        config = {
+            "ingress": "ocr_gui",
+            "chat_name": "OverTree-G-RMQG7F",
+            "chatroom_id": "7e3e4567-e89b-42d3-a456-426614174000",
+        }
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with module.registered_group_search_scope(config, target) as allowed:
+                self.assertFalse(allowed)
+                self.assertNotIn("WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH", os.environ)
 
 
 if __name__ == "__main__":

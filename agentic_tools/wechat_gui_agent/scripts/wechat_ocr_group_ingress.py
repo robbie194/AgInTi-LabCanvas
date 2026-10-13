@@ -11,6 +11,7 @@ adapter. Replies and artifacts use that adapter's guarded GUI sender.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from datetime import datetime
 import hashlib
 import json
@@ -21,7 +22,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from typing import Any
+from typing import Any, Iterator
 
 import wechat_gui_send as gui
 from file_lock import fcntl_compat as fcntl
@@ -412,17 +413,16 @@ def scan_group(
                     original_title_regions = gui.title_crop_regions
                     gui.title_crop_regions = ocr_title_crop_regions
                     try:
-                        opened_result = gui.open_target(
-                            env, window, target, pause=float(config.get("open_pause_seconds") or 0.6),
-                            out_dir=evidence, shot_prefix="ocr-open", skip_title_guard=False,
-                            # Registered groups may opt into locating their exact
-                            # generated title through WeChat search. open_target
-                            # still enforces the operator-level global-search
-                            # switch and the exact title guard before OCR reads
-                            # anything from the selected chat.
-                            prefer_current=True, allow_search=target.allow_search,
-                            fail_closed_after_visible_match=True,
-                        )
+                        with registered_group_search_scope(config, target):
+                            opened_result = gui.open_target(
+                                env, window, target, pause=float(config.get("open_pause_seconds") or 0.6),
+                                out_dir=evidence, shot_prefix="ocr-open", skip_title_guard=False,
+                                # Only a Cloud-registered group with a matching
+                                # generated title receives a scoped search opt-in.
+                                # Other targets still need the operator-level gate.
+                                prefer_current=True, allow_search=target.allow_search,
+                                fail_closed_after_visible_match=True,
+                            )
                     finally:
                         gui.title_crop_regions = original_title_regions
                     if not opened_result.get("ok"):
@@ -492,6 +492,40 @@ def target_from_config(config: dict[str, Any], chat_name: str) -> gui.TargetSpec
         "allow_title_guard_fallback": bool(raw.get("allow_title_guard_fallback", False)),
         "allow_search": bool(raw.get("allow_search", False)),
     })
+
+
+@contextmanager
+def registered_group_search_scope(config: dict[str, Any], target: gui.TargetSpec) -> Iterator[bool]:
+    """Temporarily permit search only for a Cloud-registered generated group.
+
+    WeChat's locator uses the account-wide search surface. Keep its global
+    operator switch closed for every other caller, but allow the OCR monitor to
+    locate one registered group whose stable ID and exact generated title agree.
+    The locator still has to pass its exact title guard before OCR can read it.
+    """
+    group_id = str(config.get("chatroom_id") or "").lower()
+    registered_id = str(config.get("group_registration_id") or "").lower()
+    chat_name = str(config.get("chat_name") or "").strip()
+    expected_title = str(target.expected_title or "").strip()
+    allowed = (
+        target.allow_search
+        and bool(GROUP_ID_RE.fullmatch(group_id))
+        and registered_id == group_id
+        and bool(GROUP_TITLE_RE.fullmatch(expected_title))
+        and chat_name == expected_title
+    )
+    env_key = "WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH"
+    previous = os.environ.get(env_key)
+    if allowed:
+        os.environ[env_key] = "1"
+    try:
+        yield allowed
+    finally:
+        if allowed:
+            if previous is None:
+                os.environ.pop(env_key, None)
+            else:
+                os.environ[env_key] = previous
 
 
 def ocr_title_crop_regions(window: gui.Window) -> list[dict[str, int | str]]:

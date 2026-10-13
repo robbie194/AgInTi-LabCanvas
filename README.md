@@ -140,10 +140,10 @@ pending Cloud/Gateway/LabCanvas changes are deployed. OCR replies use the
 visible Send control in X desktop coordinates and verify that the composer
 clears; noVNC browser scaling does not change those coordinates. See
 [the OCR setup](docs/WECHAT_PERSONAL_GROUP_CLOUD.md#guiocr-group-ingress).
-Registered groups may request title search from their exact per-group target
-config; the monitor still requires the explicit
-`WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH=1` operator setting and verifies the exact
-configured group title before reading messages.
+For one Cloud-registered group at a time, the monitor may briefly enable title
+search when its registered group ID and generated title match. It verifies the
+exact configured title before reading messages; every other target still
+requires the explicit `WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH=1` operator setting.
 
 ## Quick Start
 
