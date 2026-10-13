@@ -26,6 +26,17 @@ def load_module():
 
 
 class WeChatOcrGroupIngressTests(unittest.TestCase):
+    def test_ocr_debug_dump_is_rejected_as_message_text(self):
+        module = load_module()
+        debug_dump = """@OverTree 请继续处理
+2 1 3 0 0 0 108 74 281 27 -1
+3 1 3 1 0 0 108 74 281 27 -1
+4 1 3 1 1 0 108 74 281 27 -1
+5 1 3 1 1 1 108 76 218 25 91.971695 sigmoid_curve.png
+"""
+        self.assertTrue(module.looks_like_ocr_debug_text(debug_dump))
+        self.assertFalse(module.looks_like_ocr_debug_text("@OverTree 请继续处理\n第二行问题"))
+
     def test_ocr_lines_are_sorted_and_grouped(self):
         module = load_module()
         tsv = """level\tpage_num\tblock_num\tpar_num\tline_num\tleft\ttop\twidth\theight\tconf\ttext
@@ -103,6 +114,31 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         module.copy_text_bubble.assert_called_once_with(
             {"DISPLAY": ":97"}, window, 235, 100, evidence=Path(tmp)
         )
+
+    def test_ocr_trigger_rejects_native_copy_tesseract_dump(self):
+        module = load_module()
+        tsv = """level\tpage_num\tblock_num\tpar_num\tline_num\tleft\ttop\twidth\theight\tconf\ttext
+5\t1\t1\t1\t1\t160\t32\t80\t32\t95\t@OverTree
+"""
+        debug_dump = """@OverTree 请继续处理
+2 1 3 0 0 0 108 74 281 27 -1
+3 1 3 1 0 0 108 74 281 27 -1
+4 1 3 1 1 0 108 74 281 27 -1
+5 1 3 1 1 1 108 76 218 25 91.971695 sigmoid_curve.png
+"""
+        module.gui.screenshot = mock.Mock()
+        module.run_command = mock.Mock(return_value=type("Result", (), {"stdout": tsv})())
+        module.copy_text_bubble = mock.Mock(return_value=debug_dump)
+        window = type("Window", (), {"x": 10, "y": 20, "width": 1000, "height": 800})()
+        config = {
+            "personal_group_cloud": {"trigger_prefixes": ["@OverTree"]},
+            "chat_region": {"left": 100, "top": 50, "right": 0, "bottom": 0},
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = module.ocr_triggered_message({"DISPLAY": ":97"}, window, config, Path(tmp))
+
+        self.assertEqual(result, {"text": "", "method": "invalid_native_copy"})
 
     def test_copy_menu_requires_exact_copy_action_near_bubble(self):
         module = load_module()

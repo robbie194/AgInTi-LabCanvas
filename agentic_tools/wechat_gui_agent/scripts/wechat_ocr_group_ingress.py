@@ -49,6 +49,9 @@ CONTEXT_MENU_LABELS = {
     "引用", "quote", "删除", "刪除", "delete", "撤回", "recall",
     "搜一搜", "search", "翻译", "翻譯", "translate", "编辑", "編輯", "edit",
 }
+OCR_DEBUG_ROW_RE = re.compile(
+    r"^\s*[2-5]\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+-?(?:\d+(?:\.\d+)?|\d*\.\d+)\s+.+$"
+)
 PASSIVE_SIGNATURE_SIZE = (96, 64)
 COPY_MENU_SCALE = 2.5
 _REMOTE_GROUP_CACHE: dict[str, Any] = {"fetched_at": 0.0, "configs": [], "error": ""}
@@ -551,7 +554,13 @@ def ocr_triggered_message(
             if point and copy_enabled:
                 copied = copy_text_bubble(env, window, *point, evidence=evidence)
             if copied and any(prefix.casefold() in copied.casefold() for prefix in prefixes):
-                return {"text": normalize_message_text(copied)[:30_000], "method": "native_copy"}
+                normalized = normalize_message_text(copied)
+                if looks_like_ocr_debug_text(normalized):
+                    # A failed native copy can return a prior OCR/Tesseract
+                    # dump from the clipboard. Never submit diagnostic rows as
+                    # a user's question; require the next clean message.
+                    return {"text": "", "method": "invalid_native_copy"}
+                return {"text": normalized[:30_000], "method": "native_copy"}
             return {"text": normalize_message_text(text)[:30_000], "method": "ocr_fallback"}
         match = CODE_RE.fullmatch(text.strip())
         if match:
@@ -884,6 +893,15 @@ def normalize_message_text(text: str) -> str:
     while lines and not lines[-1]:
         lines.pop()
     return "\n".join(lines)
+
+
+def looks_like_ocr_debug_text(text: str) -> bool:
+    """Detect Tesseract TSV rows accidentally copied into the chat payload."""
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    if len(lines) < 4:
+        return False
+    debug_rows = sum(bool(OCR_DEBUG_ROW_RE.match(line)) for line in lines)
+    return debug_rows >= 3 and debug_rows * 2 >= len(lines)
 
 
 def slug(value: str) -> str:
