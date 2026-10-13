@@ -1117,7 +1117,10 @@ def filename_identity_score(expected: str, observed: str) -> float:
 
 def tesseract_words(tsv_text: str) -> list[dict[str, Any]]:
     words: list[dict[str, Any]] = []
-    reader = csv.DictReader(io.StringIO(tsv_text), delimiter="\t")
+    # OCR text is an unquoted TSV field. A recognized double quote must stay
+    # literal; csv's default quote handling can otherwise consume every row
+    # after an unmatched quote in a chat preview or filename.
+    reader = csv.DictReader(io.StringIO(tsv_text), delimiter="\t", quoting=csv.QUOTE_NONE)
     for row in reader:
         text = str(row.get("text") or "").strip()
         if not text:
@@ -1573,7 +1576,9 @@ def visible_chat_list_match_from_tsv(tsv_text: str, target: TargetSpec) -> dict[
     if not expected_titles:
         return None
     rows: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
-    reader = csv.DictReader(io.StringIO(tsv_text), delimiter="\t")
+    # Tesseract does not quote TSV text fields. Disable CSV quote handling so
+    # OCR output such as an unmatched `"` cannot swallow subsequent chat rows.
+    reader = csv.DictReader(io.StringIO(tsv_text), delimiter="\t", quoting=csv.QUOTE_NONE)
     for raw in reader:
         text = str(raw.get("text") or "").strip()
         if not text:

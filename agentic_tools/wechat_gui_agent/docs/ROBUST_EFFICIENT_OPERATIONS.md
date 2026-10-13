@@ -142,10 +142,12 @@ skips GUI navigation and OCR; a changed screen or the bounded
 `WECHAT_OCR_GROUP_ACTIVE_RESCAN_SECONDS` safety interval (180 seconds by
 default) starts an active pass. Empty-screen Cloud polls still reconcile
 already-submitted tasks and the reply outbox without taking over the chat UI.
-After the exact group-title guard succeeds, OCR locates an addressed text
-bubble. The monitor opens that bubble's native context menu, crops and enlarges
-the region beside the click, then corroborates the exact Copy row with a nearby
-native menu action. It validates
+Read Tesseract TSV as unquoted fields: OCR may return a literal unmatched
+double quote in a chat preview, which must not hide later exact group-title
+rows from the selector. After the exact group-title guard succeeds, OCR locates
+an addressed text bubble. The monitor opens that bubble's native context menu,
+crops and enlarges the region beside the click, then corroborates the exact
+Copy row with a nearby native menu action. It validates
 that X clipboard text replaced a unique sentinel, and treats the copied
 message as authoritative. It allows up to 1.5 seconds for clipboard ownership
 to update. Ambiguous menus or stale clipboard contents fall back to the

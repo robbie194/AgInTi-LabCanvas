@@ -1268,6 +1268,44 @@ class WeChatGuiSendTests(unittest.TestCase):
         self.assertEqual(match["text"], "懒人科研")
         self.assertGreater(match["center_y"], 160)
 
+    def test_visible_chat_list_match_survives_unmatched_ocr_quote_in_previous_row(self):
+        module = load_wechat_gui_send()
+        tsv = "\n".join(
+            [
+                "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext",
+                '5\t1\t6\t1\t1\t1\t100\t66\t28\t10\t24.9\t"sigmai',
+                "5\t1\t7\t1\t1\t1\t65\t111\t139\t13\t92.0\tOverTree-G-4Q8U4K",
+                "5\t1\t7\t1\t1\t2\t213\t112\t27\t8\t58.6\t00:47",
+            ]
+        )
+
+        match = module.visible_chat_list_match_from_tsv(
+            tsv,
+            module.TargetSpec(
+                name="OverTree-G-4Q8U4K",
+                query="OverTree-G-4Q8U4K",
+                expected_title="OverTree-G-4Q8U4K",
+            ),
+        )
+
+        self.assertIsNotNone(match)
+        assert match is not None
+        self.assertEqual(match["text"], "OverTree-G-4Q8U4K")
+
+    def test_tesseract_words_preserves_unmatched_ocr_quotes(self):
+        module = load_wechat_gui_send()
+        tsv = "\n".join(
+            [
+                "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext",
+                '5\t1\t6\t1\t1\t1\t100\t66\t28\t10\t24.9\t"sigmai',
+                "5\t1\t7\t1\t1\t1\t65\t111\t139\t13\t92.0\tOverTree-G-4Q8U4K",
+            ]
+        )
+
+        words = module.tesseract_words(tsv)
+
+        self.assertEqual([item["text"] for item in words], ['"sigmai', "OverTree-G-4Q8U4K"])
+
     def test_visible_chat_list_match_ignores_avatar_ocr_on_title_line(self):
         module = load_wechat_gui_send()
         tsv = "\n".join(
