@@ -673,6 +673,10 @@ def send_file_to_open_chat(
         window.y + window.height - 34,
     )
     time.sleep(max(1.0, pause))
+    # A native chooser can remain visible even when the click lands on the
+    # underlying WeChat window. Do not call that a send: the guarded window
+    # must regain focus and the chooser must actually disappear first.
+    wait_for_wechat_focus_after_picker(env, window)
     sent_path = out_dir / f"{shot_prefix}-file-sent.png"
     screenshot(env, sent_path)
     raise_if_wechat_locked(
@@ -682,7 +686,7 @@ def send_file_to_open_chat(
         out_dir / f"{shot_prefix}-file-sent-lock.png",
         "after file submission",
     )
-    if same_screenshot(selected_path, sent_path):
+    if same_screenshot(selected_path, sent_path) or same_screenshot(preflight_path, sent_path):
         raise RuntimeError(
             "WECHAT_FILE_SEND_VERIFY_FAILED: native file selection did not "
             f"produce a visible sent state for {path.name}"
@@ -810,10 +814,11 @@ def wait_for_wechat_focus_after_picker(
     last = None
     while time.monotonic() < deadline:
         last = active_window_identity(env)
-        if last is not None and last.wid == wechat_window.wid:
-            return
         visible = visible_window_identities(env)
-        if not any(is_verified_file_chooser(item, wechat_window) for item in visible):
+        chooser_visible = any(is_verified_file_chooser(item, wechat_window) for item in visible)
+        if last is not None and last.wid == wechat_window.wid and not chooser_visible:
+            return
+        if not chooser_visible:
             if any(item.wid == wechat_window.wid for item in visible):
                 focus(env, wechat_window)
                 return

@@ -200,6 +200,36 @@ class WeChatGuiSendTests(unittest.TestCase):
             ],
         )
 
+    def test_guarded_file_helper_rejects_chooser_closing_without_sent_bubble(self):
+        module = load_wechat_gui_send()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            file_path = root / "report.pdf"
+            file_path.write_bytes(b"%PDF-1.4\n")
+
+            def fake_screenshot(_env, path):
+                name = Path(path).name
+                Path(path).write_bytes(b"selected" if "selected" in name else b"preflight")
+
+            with (
+                mock.patch.object(module, "focus"),
+                mock.patch.object(module, "screenshot", side_effect=fake_screenshot),
+                mock.patch.object(module, "detect_wechat_locked", return_value={"locked": False, "ocr_text": ""}),
+                mock.patch.object(module, "clear_composer"),
+                mock.patch.object(module, "click"),
+                mock.patch.object(module, "wait_for_verified_file_chooser", return_value=module.WindowIdentity("chooser", "Select File", "wechat wechat")),
+                mock.patch.object(module, "paste_path_into_file_chooser"),
+                mock.patch.object(module, "wait_for_wechat_focus_after_picker"),
+                mock.patch.object(module, "verify_opened_title", return_value={"ok": True, "method": "file_selected"}),
+                mock.patch.object(module.time, "sleep"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "WECHAT_FILE_SEND_VERIFY_FAILED"):
+                    module.send_file_to_open_chat(
+                        {}, module.Window("main", 0, 0, 1000, 700),
+                        module.TargetSpec(name="EchoMind", query="EchoMind", expected_title="EchoMind"),
+                        file_path, root, "chooser-stuck", pause=0.1,
+                    )
+
     def test_guarded_file_helper_rejects_target_change_after_picker(self):
         module = load_wechat_gui_send()
         with tempfile.TemporaryDirectory() as tmp:
