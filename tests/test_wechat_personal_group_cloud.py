@@ -504,6 +504,37 @@ class PersonalGroupCloudTests(unittest.TestCase):
         self.assertEqual(state["personal_group_cloud_outbox"], [])
         self.assertFalse(path.exists())
 
+    def test_successful_file_retry_removes_only_its_stale_failure_warning(self):
+        state = {"personal_group_cloud_outbox": [{
+            "id": "artifact-1",
+            "kind": "file",
+            "artifact": {"url": "https://cloud.example/wechat/files/token", "name": "result.png", "maxBytes": 50 * 1024 * 1024},
+            "resultId": "result-1",
+            "sourceRow": {},
+        }, {
+            "id": "file-warning-artifact-1",
+            "kind": "file-warning",
+            "text": "文件“result.png”暂时无法发送，请在 OverTree 项目文件区查看。",
+            "relatedArtifactId": "artifact-1",
+            "resultId": "result-1",
+        }, {
+            "id": "file-warning-artifact-2",
+            "kind": "file-warning",
+            "text": "文件“other.pdf”暂时无法发送，请在 OverTree 项目文件区查看。",
+            "relatedArtifactId": "artifact-2",
+            "resultId": "result-1",
+        }]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "result.png"
+            path.write_bytes(b"image")
+            with mock.patch.object(bridge, "_download_artifact", return_value=path):
+                sent, error = bridge._flush_outbox(
+                    self.config(), state, lambda *_args: None, time.time(), send_file=lambda *_args: None
+                )
+
+        self.assertEqual((sent, error), ("", None))
+        self.assertEqual([item["id"] for item in state["personal_group_cloud_outbox"]], ["file-warning-artifact-2"])
+
     def test_permanently_missing_cloud_artifact_does_not_block_following_outbox_items(self):
         state = {"personal_group_cloud_outbox": [{
             "id": "artifact-1",
@@ -531,6 +562,7 @@ class PersonalGroupCloudTests(unittest.TestCase):
         self.assertEqual(len(state["personal_group_cloud_outbox"]), 2)
         self.assertEqual(state["personal_group_cloud_outbox"][0]["id"], "reply-1")
         self.assertIn("old.png", state["personal_group_cloud_outbox"][1]["text"])
+        self.assertEqual(state["personal_group_cloud_outbox"][1]["relatedArtifactId"], "artifact-1")
 
     def test_ocr_uncertain_send_is_not_retried_after_backoff_or_reload(self):
         state = {"personal_group_cloud_outbox": [{"id": "reply", "text": "result"}]}

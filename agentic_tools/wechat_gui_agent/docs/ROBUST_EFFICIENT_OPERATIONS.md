@@ -113,6 +113,9 @@ text part and file in the group's private outbox. Download each file only from
 the explicitly configured HTTPS Cloud origin, enforce the plan's byte limit
 while streaming, pass it to the exact-title guarded GUI file sender, and remove
 the private temporary copy after the send attempt.
+If an expired artifact becomes a queued failure notice and a later retry of
+that same artifact succeeds, remove only the notice linked to its stable outbox
+ID. Keep notices for other files in the same result.
 
 Cloud's source now includes per-user group-name registration and a code scoped
 to its selected group slot. Once deployed, Cloud generates the exact group

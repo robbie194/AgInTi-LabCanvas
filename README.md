@@ -98,8 +98,10 @@ same-name variants and allows PNG/JPEG/GIF/WebP images plus PDF/TXT/Word files.
 It leaves other files in the OverTree project file area and never sends a
 download URL to the group. The personal-group adapter downloads selected files
 to a private temporary path and hands them to the existing exact-title guarded
-GUI sender. These shared-plan changes are in source but are not deployed to
-production yet.
+GUI sender. If an expired artifact later succeeds on retry, the adapter removes
+that artifact's queued failure notice by its stable ID; notices for other failed
+files remain visible. These shared-plan changes are in source but are not
+deployed to production yet.
 
 The adapter calls Cloud's separate HMAC-signed
 `/internal/wechat/personal-groups/v1/*` routes over a private VPN or SSH tunnel;

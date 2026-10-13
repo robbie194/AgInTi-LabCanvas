@@ -297,7 +297,7 @@ def _send(send_text: Callable[..., Any], config: dict[str, Any], state: dict[str
 
 def _enqueue_outgoing(state: dict[str, Any], text: str, source: dict[str, Any], kind: str,
                       *, message_id: str = "", artifact: dict[str, Any] | None = None,
-                      result_id: str = "") -> str:
+                      result_id: str = "", related_artifact_id: str = "") -> str:
     outbox = state.setdefault("personal_group_cloud_outbox", [])
     stable_id = message_id or hashlib.sha256(
         f"{kind}|{source.get('_message_db')}|{source.get('local_id')}|{text}".encode("utf-8")
@@ -309,6 +309,7 @@ def _enqueue_outgoing(state: dict[str, Any], text: str, source: dict[str, Any], 
             "kind": kind,
             **({"artifact": artifact} if artifact else {}),
             **({"resultId": result_id} if result_id else {}),
+            **({"relatedArtifactId": related_artifact_id} if related_artifact_id else {}),
             "sourceRow": {
                 "_message_db": str(source.get("_message_db") or ""),
                 "server_id": str(source.get("server_id") or ""),
@@ -434,7 +435,9 @@ def _flush_outbox(config: dict[str, Any], state: dict[str, Any], send_text: Call
                 f"文件“{name}”暂时无法发送，请在 OverTree 项目文件区查看。",
                 item.get("sourceRow") or {},
                 "file-warning",
+                message_id=f"file-warning-{item.get('id')}" if item.get("id") else "",
                 result_id=str(item.get("resultId") or ""),
+                related_artifact_id=str(item.get("id") or ""),
             )
             return None, None
         attempts = int(item.get("attempts") or 0) + 1
@@ -455,6 +458,17 @@ def _flush_outbox(config: dict[str, Any], state: dict[str, Any], send_text: Call
         item.pop("sendingAt", None)
         return None, item["lastError"]
     outbox.pop(0)
+    if kind == "file":
+        artifact_id = str(item.get("id") or "")
+        if artifact_id:
+            outbox[:] = [
+                queued for queued in outbox
+                if not (
+                    isinstance(queued, dict)
+                    and str(queued.get("kind") or "") == "file-warning"
+                    and str(queued.get("relatedArtifactId") or "") == artifact_id
+                )
+            ]
     return str(item.get("text") or ""), None
 
 
