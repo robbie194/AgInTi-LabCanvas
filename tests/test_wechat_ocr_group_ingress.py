@@ -552,6 +552,49 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         self.assertEqual(poll_cloud.call_args.args[2], [])
         self.assertEqual(len(saved["ocr_seen_fingerprints"]), 1)
 
+    def test_registered_group_search_keeps_exact_title_guard(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            private = Path(tmp) / "private"
+            private.mkdir()
+            module.PRIVATE = private
+            module.GUI_LOCK = private / "wechat_gui_send.lock"
+            config = {
+                "enabled": True,
+                "ingress": "ocr_gui",
+                "chat_name": "OverTree-G-RMQG7F",
+                "chatroom_id": "7e3e4567-e89b-42d3-a456-426614174000",
+                "state_path": str(private / "group.state.json"),
+                "send_target": {
+                    "name": "OverTree-G-RMQG7F",
+                    "query": "OverTree-G-RMQG7F",
+                    "expected_title": "OverTree-G-RMQG7F",
+                    "allow_search": True,
+                },
+                "personal_group_cloud": {"enabled": True},
+            }
+            args = type("Args", (), {"display": ":97", "require_unread_badge": False})()
+            window = type("Window", (), {"x": 0, "y": 0, "width": 916, "height": 700})()
+
+            with mock.patch.object(module.gui, "require_tools"), \
+                 mock.patch.object(module.gui, "wait_for_main_wechat_window", return_value=window), \
+                 mock.patch.object(module.gui, "open_target", return_value={
+                     "ok": False,
+                     "method": "search_disabled",
+                     "search_disabled": True,
+                 }) as open_target, \
+                 mock.patch.object(module, "ocr_triggered_message") as extract_message, \
+                 mock.patch.object(module, "run_cloud_once") as poll_cloud:
+                result = module.scan_group(args, config, private / "group.json", scan_gui=True)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "title_guard_failed")
+        self.assertTrue(open_target.call_args.kwargs["allow_search"])
+        self.assertFalse(open_target.call_args.kwargs["skip_title_guard"])
+        self.assertTrue(open_target.call_args.kwargs["fail_closed_after_visible_match"])
+        extract_message.assert_not_called()
+        poll_cloud.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

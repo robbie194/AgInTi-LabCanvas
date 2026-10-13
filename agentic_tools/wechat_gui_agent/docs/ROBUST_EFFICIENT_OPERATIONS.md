@@ -152,6 +152,12 @@ skips GUI navigation and OCR; a changed screen or the bounded
 `WECHAT_OCR_GROUP_ACTIVE_RESCAN_SECONDS` safety interval (180 seconds by
 default) starts an active pass. Empty-screen Cloud polls still reconcile
 already-submitted tasks and the reply outbox without taking over the chat UI.
+For registered groups, pass the group's `allow_search` setting through to the
+GUI locator so it can find an exact generated title that is not in the visible
+chat list. WeChat's global-search surface remains disabled unless the operator
+sets `WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH=1`; the exact configured title guard
+must pass before OCR reads the selected conversation, and a failed title check
+stops that scan.
 Read Tesseract TSV as unquoted fields: OCR may return a literal unmatched
 double quote in a chat preview, which must not hide later exact group-title
 rows from the selector. After the exact group-title guard succeeds, OCR locates

@@ -415,7 +415,13 @@ def scan_group(
                         opened_result = gui.open_target(
                             env, window, target, pause=float(config.get("open_pause_seconds") or 0.6),
                             out_dir=evidence, shot_prefix="ocr-open", skip_title_guard=False,
-                            prefer_current=True, allow_search=False, fail_closed_after_visible_match=True,
+                            # Registered groups may opt into locating their exact
+                            # generated title through WeChat search. open_target
+                            # still enforces the operator-level global-search
+                            # switch and the exact title guard before OCR reads
+                            # anything from the selected chat.
+                            prefer_current=True, allow_search=target.allow_search,
+                            fail_closed_after_visible_match=True,
                         )
                     finally:
                         gui.title_crop_regions = original_title_regions
