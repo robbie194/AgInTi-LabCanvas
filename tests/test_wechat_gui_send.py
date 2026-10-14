@@ -78,6 +78,46 @@ class WeChatGuiSendTests(unittest.TestCase):
         self.assertIn(("key", "BackSpace"), calls)
         self.assertIn(("paste", "OverTree-5UMH"), calls)
 
+    def test_open_target_uses_ocr_search_result_before_fixed_rows(self):
+        module = load_wechat_gui_send()
+        target = module.TargetSpec(
+            name="OverTree-5UMH",
+            query="OverTree-5UMH",
+            expected_title="OverTree-5UMH",
+            expected_title_aliases=("OverTree-5UMH-",),
+            allow_search=True,
+        )
+        window = module.Window("main", 502, 206, 916, 666)
+        search_match = {"text": "OverTree-5UMH 自测", "click_x": 170, "click_y": 192}
+        search_calls: list[str] = []
+        visible_matches = iter([None, search_match])
+
+        with (
+            mock.patch.dict(module.os.environ, {"WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH": "1"}),
+            mock.patch.object(module, "click_visible_chat_list_match", side_effect=lambda *_args, **_kwargs: next(visible_matches)),
+            mock.patch.object(module, "search_for_target", side_effect=lambda _env, _window, query, _pause: search_calls.append(query)),
+            mock.patch.object(module, "screenshot"),
+            mock.patch.object(module, "title_window_candidates", return_value=[window]),
+            mock.patch.object(module, "verify_opened_title", return_value={
+                "ok": True,
+                "method": "search_result_ocr",
+                "ocr_text": "OverTree-5UMH 自测",
+                "compose_window": module.window_to_dict(window),
+            }),
+            mock.patch.object(module, "click"),
+            mock.patch.object(module.time, "sleep"),
+            tempfile.TemporaryDirectory() as tmp,
+        ):
+            result = module.open_target(
+                {}, window, target, 0, Path(tmp), "search-result-test", False,
+                False, True, fail_closed_after_visible_match=True,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["method"], "search_result_ocr")
+        self.assertEqual(search_calls, ["OverTree-5UMH"])
+        self.assertEqual(result["search_result_match"], search_match)
+
     def test_gui_send_lock_waits_for_current_sender_then_acquires(self):
         module = load_wechat_gui_send()
         lock = object()

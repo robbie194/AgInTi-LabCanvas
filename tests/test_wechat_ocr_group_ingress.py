@@ -331,6 +331,25 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
             )
         self.assertEqual(result, "ABCD2345")
 
+    def test_unbound_group_claims_older_code_before_newer_question(self):
+        module = load_module()
+        lines = [
+            {"text": "ABCD2345", "top": 10},
+            {"text": "@OverTree 新问题", "top": 50},
+        ]
+        module.parse_ocr_lines = lambda _tsv: lines
+        module.run_command = lambda *args, **kwargs: type("Result", (), {"stdout": ""})()
+        module.gui.screenshot = lambda *_args, **_kwargs: None
+        with tempfile.TemporaryDirectory() as tmp:
+            result = module.ocr_triggered_message(
+                {"DISPLAY": ":97"},
+                type("Window", (), {"x": 0, "y": 0, "width": 1200, "height": 800})(),
+                {"personal_group_cloud": {"trigger_prefixes": ["@OverTree"]}},
+                Path(tmp),
+                prefer_binding_code=True,
+            )
+        self.assertEqual(result, {"text": "ABCD2345", "method": "ocr_binding_code"})
+
     def test_config_generator_derives_stable_title_group_id(self):
         path = ROOT / "agentic_tools/wechat_gui_agent/scripts/wechat_ocr_group_config.py"
         with tempfile.TemporaryDirectory() as tmp:

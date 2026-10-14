@@ -125,7 +125,10 @@ def scan_once(args: argparse.Namespace, configs: list[Path]) -> list[dict[str, A
         except Exception as exc:
             results.append({"ok": False, "registry": "cloud", "error": f"{type(exc).__name__}: {str(exc)[:500]}"})
             registered = []
-        for config in registered:
+        # Cloud returns registrations oldest first.  Scan the newest groups
+        # first so a newly generated connection code is handled promptly even
+        # when older groups are temporarily slow to open in the GUI.
+        for config in reversed(registered):
             group_id = str(config.get("chatroom_id") or "")
             if group_id in local_group_ids:
                 continue
@@ -436,7 +439,13 @@ def scan_group(
                             "method": opened_result.get("method"), "window_title": opened_result.get("window_title"),
                         }
                     opened = True
-                    extraction = ocr_triggered_message(env, window, config, evidence)
+                    extraction = ocr_triggered_message(
+                        env,
+                        window,
+                        config,
+                        evidence,
+                        prefer_binding_code=not bool(state.get("personal_group_cloud_binding_id")),
+                    )
                     extracted = str(extraction.get("text") or "")
                     extraction_method = str(extraction.get("method") or "none")
             else:
@@ -579,6 +588,8 @@ def ocr_triggered_message(
     window: gui.Window,
     config: dict[str, Any],
     evidence: Path,
+    *,
+    prefer_binding_code: bool = False,
 ) -> dict[str, str]:
     region = chat_region(window, config)
     source = evidence / "screen.png"
@@ -590,10 +601,19 @@ def ocr_triggered_message(
     prefixes = [str(item).strip() for item in (config.get("personal_group_cloud") or {}).get("trigger_prefixes", []) if str(item).strip()]
     # A screenshot contains the full visible history. Use the newest OCR line
     # addressed to the Agent; concatenating every line after the first match
-    # would resubmit older messages whenever the chat remains open.
-    # Choose the newest addressed event regardless of whether it is a mention
-    # or a binding code. Otherwise an old visible mention could mask a newer
-    # code line and prevent an intentional session switch.
+    # would resubmit older messages whenever the chat remains open. A newly
+    # opened group has to claim an older visible code before handling a newer
+    # question, otherwise the question masks the code and the group remains
+    # unbound. Once a binding exists, return to the newest addressed line so
+    # an old code cannot starve normal questions.
+    binding_code = ""
+    for line in reversed(lines):
+        match = CODE_RE.fullmatch(str(line["text"]).strip())
+        if match:
+            binding_code = match.group(0).upper()
+            break
+    if prefer_binding_code and binding_code:
+        return {"text": binding_code, "method": "ocr_binding_code"}
     for line in reversed(lines):
         text = line["text"]
         if any(prefix.casefold() in text.casefold() for prefix in prefixes):

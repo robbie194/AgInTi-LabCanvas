@@ -1429,6 +1429,32 @@ def open_target(
     search_query = preferred_search_query(target)
     search_for_target(env, window, search_query, pause)
     screenshot(env, out_dir / f"{shot_prefix}-search.png")
+
+    # Search results use a different vertical layout from the normal chat
+    # list.  Locate the exact registered title from the visible result row
+    # before trying legacy fixed coordinates; those coordinates can land on
+    # "Add Contacts" and leave the sender stuck in a modal dialog.
+    search_match = click_visible_chat_list_match(env, window, target, out_dir, f"{shot_prefix}-search-result")
+    if search_match:
+        guard = verify("search_result_ocr")
+        attempts.append({**guard, "search_result_match": search_match})
+        if guard["ok"]:
+            return {**guard, "search_result_match": search_match}
+        click(env, window.x + int(search_match["click_x"]), window.y + int(search_match["click_y"]))
+        guard = verify("search_result_ocr_retry")
+        attempts.append({**guard, "search_result_match": search_match})
+        if guard["ok"]:
+            return {**guard, "search_result_match": search_match}
+        if fail_closed_after_visible_match:
+            return {
+                **guard,
+                "ok": False,
+                "method": str(guard.get("method") or "search_result_ocr_retry"),
+                "exact_search_result_match_open_failed": True,
+                "attempts": attempts,
+                "search_result_match": search_match,
+            }
+
     for label, point in target_click_candidates(target):
         click(env, window.x + point[0], window.y + point[1])
         guard = verify(label)
