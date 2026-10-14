@@ -59,6 +59,25 @@ class WeChatGuiSendTests(unittest.TestCase):
             ],
         )
 
+    def test_search_clicks_center_of_compact_search_field(self):
+        module = load_wechat_gui_send()
+        calls: list[tuple[str, object]] = []
+        window = module.Window("main", 502, 206, 916, 666)
+
+        with (
+            mock.patch.object(module, "click", side_effect=lambda _env, x, y: calls.append(("click", (x, y)))),
+            mock.patch.object(module, "hotkey", side_effect=lambda _env, name: calls.append(("hotkey", name))),
+            mock.patch.object(module, "key", side_effect=lambda _env, name: calls.append(("key", name))),
+            mock.patch.object(module, "paste_text", side_effect=lambda _env, text: calls.append(("paste", text))),
+            mock.patch.object(module.time, "sleep"),
+        ):
+            module.search_for_target({}, window, "OverTree-5UMH", 0)
+
+        self.assertEqual(calls[0], ("click", (620, 266)))
+        self.assertIn(("hotkey", "ctrl+a"), calls)
+        self.assertIn(("key", "BackSpace"), calls)
+        self.assertIn(("paste", "OverTree-5UMH"), calls)
+
     def test_gui_send_lock_waits_for_current_sender_then_acquires(self):
         module = load_wechat_gui_send()
         lock = object()

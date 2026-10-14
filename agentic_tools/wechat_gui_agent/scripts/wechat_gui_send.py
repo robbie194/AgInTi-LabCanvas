@@ -1693,7 +1693,12 @@ def target_click_candidates(target: TargetSpec) -> list[tuple[str, tuple[int, in
 
 
 def search_for_target(env: dict[str, str], window: Window, query: str, pause: float) -> None:
-    click(env, window.x + 118, window.y + 46)
+    # The search field is a little taller than its border.  Clicking at the
+    # top edge (the old ``+46`` position) is ignored by the Linux WeChat
+    # client on the compact 916px window, so the query is never entered and
+    # the subsequent result clicks operate on the current chat.  Aim at the
+    # vertical center of the field instead.
+    click(env, window.x + 118, window.y + 60)
     time.sleep(pause)
     hotkey(env, "ctrl+a")
     key(env, "BackSpace")
