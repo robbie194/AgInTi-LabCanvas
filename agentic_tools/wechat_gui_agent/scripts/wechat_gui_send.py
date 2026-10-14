@@ -1937,10 +1937,15 @@ def title_identity_matches(observed_text: str, expected_titles: list[str] | tupl
                 separator_hint=title_has_explicit_separator(raw_expected),
             )
             observed = normalized_observed.rstrip("0123456789")
-            if not observed:
+            if not normalized_observed:
                 continue
             if not expected:
                 continue
+            # A generated group code may legitimately end in a digit. Check
+            # the complete normalized title before the legacy OCR timestamp
+            # trimming below.
+            if normalized_observed == expected:
+                return True
             if observed == expected or (
                 observed.startswith(expected) and len(observed) - len(expected) <= 3
             ):

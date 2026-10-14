@@ -1368,6 +1368,10 @@ class WeChatGuiSendTests(unittest.TestCase):
             "OverTree-ABCD-论文讨论",
             ["OverTree-ABCD", "OverTree-ABCD-"],
         ))
+        self.assertTrue(module.title_identity_matches(
+            "OverTree-AB23",
+            ["OverTree-AB23", "OverTree-AB23-"],
+        ))
         self.assertFalse(module.title_identity_matches(
             "OverTree-ABCE-论文讨论",
             ["OverTree-ABCD", "OverTree-ABCD-"],
