@@ -122,14 +122,14 @@ that same artifact succeeds, remove only the notice linked to its stable outbox
 ID. Keep notices for other files in the same result.
 
 Cloud's source now includes per-user group-name registration and a code scoped
-to its selected group slot. Once deployed, Cloud generates the exact group
-title; a customer-service operator still creates the regular WeChat group,
-adds the Agent and intended members, and applies that title manually. The
+to its selected group slot. Cloud generates a compact four-character prefix; a
+customer-service operator still creates the regular WeChat group, adds the Agent
+and intended members, and may append a readable suffix to that prefix. The
 customer selects the registered slot plus project/session in `/wechat` and
 sends its one-time code only into that group. The adapter claims it using the
-exact observed group identity. As of 2026-10-12, this registration feature and
-the shared delivery-plan changes are not deployed to production Cloud; the
-existing preconfigured OCR pilot remains the only live personal group.
+registered prefix and exact Cloud group identity. The registration feature and
+the shared delivery-plan changes are deployed to production Cloud; the
+preconfigured OCR pilot remains available alongside newly registered groups.
 
 For OCR-only groups, synthetic visible-text rows have no native WeChat message
 database receipt. Route only `ingress=ocr_gui` text replies through the

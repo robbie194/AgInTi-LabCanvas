@@ -73,11 +73,10 @@ Cloud.
 The isolated `OvertreeAI 测试` OCR pilot is active and bound to its selected
 Cloud project/session. Its binding confirmation was verified in the group on
 2026-10-12 after fixing OCR-only text delivery. Other group configs stay
-disabled by default. The Cloud group-registration UI/API is implemented in the
-source tree but is not deployed to the live Cloud service yet. Production Cloud
-is still at `10129d9` and its database lacks the group-registration table, so
-new users cannot yet register a group themselves; only the preconfigured pilot
-group is currently available.
+disabled by default. The Cloud group-registration UI/API and compact group-name
+matching are deployed to the live Cloud service, and the Agent workstation's
+remote registry sync discovers new registrations automatically. The
+preconfigured pilot group remains available for backward compatibility.
 
 The customer signs in at `/wechat` and asks Cloud to generate a unique compact
 name such as `OverTree-ABCD`. A customer-service operator creates the ordinary

@@ -134,11 +134,11 @@ rejected and remains usable in its intended group. Do not reuse a registered
 prefix for another WeChat group. A user's groups and bindings remain isolated
 by Cloud account, group UUID, and per-group local state file.
 
-This registry flow is implemented in the checked-out Cloud and LabCanvas source,
-but the Cloud release has not been deployed. Until it is deployed and
-`WECHAT_OCR_GROUP_REMOTE_SYNC=true` is enabled on the Agent workstation, only
-the already configured `OvertreeAI 测试` pilot is available; new customer groups
-still require local registration.
+This registry flow is deployed in Cloud and in the read-only LabCanvas Agent
+code root. The Agent workstation keeps
+`WECHAT_OCR_GROUP_REMOTE_SYNC=true`, so new active registrations are discovered
+automatically; the preconfigured `OvertreeAI 测试` pilot remains available for
+backward compatibility.
 
 ## GUI/OCR group ingress
 
