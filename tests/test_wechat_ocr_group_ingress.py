@@ -411,6 +411,25 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         self.assertIn(group_id, allowlist)
         self.assertIn("legacy-group", allowlist)
 
+    def test_registered_compact_group_allows_customer_title_suffix(self):
+        module = load_module()
+        group_id = "7e3e4567-e89b-42d3-a456-426614174000"
+        fake_client = type("FakeRegistryClient", (), {
+            "list_registered_groups": lambda _self: {
+                "ok": True,
+                "groups": [{"groupId": group_id, "title": "OverTree-ABCD"}],
+            },
+        })()
+        cloud = sys.modules["wechat_personal_group_cloud"]
+        with mock.patch.dict(os.environ, {"WECHAT_OCR_GROUP_REMOTE_SYNC": "true"}), \
+             mock.patch.object(cloud, "build_registry_client", return_value=fake_client):
+            module._REMOTE_GROUP_CACHE.update({"fetched_at": 0.0, "configs": [], "error": ""})
+            configs = module.registered_group_configs(force_refresh=True)
+
+        target = configs[0]["send_target"]
+        self.assertEqual(target["expected_title"], "OverTree-ABCD")
+        self.assertEqual(target["expected_title_aliases"], ["OverTree-ABCD-"])
+
     def test_registered_group_sync_ignores_titles_outside_generated_name_policy(self):
         module = load_module()
         cloud = sys.modules["wechat_personal_group_cloud"]

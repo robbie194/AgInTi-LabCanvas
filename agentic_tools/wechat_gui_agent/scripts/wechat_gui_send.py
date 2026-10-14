@@ -1920,23 +1920,35 @@ def visible_chat_row_identity(
 
 
 def title_identity_matches(observed_text: str, expected_titles: list[str] | tuple[str, ...]) -> bool:
-    """Match an exact chat title while tolerating one known OCR separator error."""
+    """Match a chat title while tolerating OCR separators and registered prefixes.
+
+    A configured title ending in a separator is an explicit prefix target. The
+    personal-group registry uses this for names such as ``OverTree-ABCD`` so a
+    customer can append ``-论文讨论`` without changing the Cloud binding.
+    """
     candidates = [line for line in str(observed_text or "").splitlines() if line.strip()]
     if not candidates:
         candidates = [str(observed_text or "")]
     for candidate in candidates:
         for raw_expected in expected_titles:
             expected = normalize_visible_chat_title(raw_expected)
-            observed = normalize_visible_chat_title(
+            normalized_observed = normalize_visible_chat_title(
                 candidate,
                 separator_hint=title_has_explicit_separator(raw_expected),
-            ).rstrip("0123456789")
+            )
+            observed = normalized_observed.rstrip("0123456789")
             if not observed:
                 continue
             if not expected:
                 continue
             if observed == expected or (
                 observed.startswith(expected) and len(observed) - len(expected) <= 3
+            ):
+                return True
+            if (
+                str(raw_expected or "").strip().endswith(("-", "_", "—", "–", "－", "·", "•", "/"))
+                and normalized_observed.startswith(expected)
+                and len(normalized_observed) > len(expected)
             ):
                 return True
     return False

@@ -43,7 +43,11 @@ PASSIVE_STATE_PREFIX = "wechat-ocr-passive"
 GUI_LOCK = PRIVATE / "wechat_gui_send.lock"
 CODE_RE = re.compile(r"(?<![A-Za-z0-9])[A-HJ-NP-Z2-9]{8}(?![A-Za-z0-9])", re.IGNORECASE)
 GROUP_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.IGNORECASE)
-GROUP_TITLE_RE = re.compile(r"^OverTree-G-[A-HJ-NP-Z2-9]{6}$")
+# Cloud now allocates compact four-character titles. Keep the six-character
+# format accepted so groups created by an older Cloud release continue to
+# work. The registered value is always the stable prefix; a customer may add
+# a readable suffix in WeChat (for example ``OverTree-ABCD-论文讨论``).
+GROUP_TITLE_RE = re.compile(r"^(?:OverTree-[A-HJ-NP-Z2-9]{4}|OverTree-G-[A-HJ-NP-Z2-9]{6})$")
 COPY_MENU_LABELS = {"复制", "複製", "copy", "copymessage", "copytext"}
 CONTEXT_MENU_LABELS = {
     "转发", "轉發", "forward", "收藏", "favorite", "多选", "多選",
@@ -350,6 +354,7 @@ def registered_group_configs(*, force_refresh: bool = False) -> list[dict[str, A
                     "name": title,
                     "query": title,
                     "expected_title": title,
+                    "expected_title_aliases": [f"{title}-"],
                     "allow_search": True,
                 },
                 "personal_group_cloud": {
@@ -501,7 +506,8 @@ def registered_group_search_scope(config: dict[str, Any], target: gui.TargetSpec
     WeChat's locator uses the account-wide search surface. Keep its global
     operator switch closed for every other caller, but allow the OCR monitor to
     locate one registered group whose stable ID and exact generated title agree.
-    The locator still has to pass its exact title guard before OCR can read it.
+    The locator still has to pass its registered title-prefix guard before OCR
+    can read it.
     """
     group_id = str(config.get("chatroom_id") or "").lower()
     registered_id = str(config.get("group_registration_id") or "").lower()

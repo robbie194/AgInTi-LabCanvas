@@ -153,16 +153,19 @@ skips GUI navigation and OCR; a changed screen or the bounded
 default) starts an active pass. Empty-screen Cloud polls still reconcile
 already-submitted tasks and the reply outbox without taking over the chat UI.
 For registered groups, pass the group's `allow_search` setting through to the
-GUI locator so it can find an exact generated title that is not in the visible
-chat list. The OCR monitor may temporarily satisfy the locator's global-search
-gate only when the Cloud-registered group ID and generated title agree; this
-scope ends after that one lookup. Other targets still require the operator to
-set `WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH=1`. The exact configured title guard
+GUI locator so it can find a registered generated title that is not in the
+visible chat list. New four-character titles use a stable `OverTree-ABCD`
+prefix and may have a customer suffix such as `-论文讨论`; the locator accepts
+that configured prefix while still rejecting other groups. The OCR monitor
+may temporarily satisfy the locator's global-search gate only when the
+Cloud-registered group ID and generated prefix agree; this scope ends after
+that one lookup. Other targets still require the operator to set
+`WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH=1`. The configured title-prefix guard
 must pass before OCR reads the selected conversation, and a failed title check
 stops that scan.
 Read Tesseract TSV as unquoted fields: OCR may return a literal unmatched
-double quote in a chat preview, which must not hide later exact group-title
-rows from the selector. After the exact group-title guard succeeds, OCR locates
+double quote in a chat preview, which must not hide later registered group-title
+rows from the selector. After the title-prefix guard succeeds, OCR locates
 an addressed text bubble. The monitor opens that bubble's native context menu,
 crops and enlarges the region beside the click, then corroborates the exact
 Copy row with a nearby native menu action. It validates

@@ -79,16 +79,17 @@ is still at `10129d9` and its database lacks the group-registration table, so
 new users cannot yet register a group themselves; only the preconfigured pilot
 group is currently available.
 
-After Cloud deploys that feature and its database migration, the customer signs
-in at `/wechat` and asks Cloud to generate a unique name such as
-`OverTree-G-7K4Q2M`. A customer-service operator creates the ordinary WeChat
-group, adds the Agent account and the intended members, then gives the group the
-exact generated name. The customer returns to `/wechat`, chooses that registered
-group plus a project, session, and idle timeout, and generates a one-time code.
+The customer signs in at `/wechat` and asks Cloud to generate a unique compact
+name such as `OverTree-ABCD`. A customer-service operator creates the ordinary
+WeChat group, adds the Agent account and the intended members, then gives the
+group that name, optionally followed by a readable suffix such as
+`OverTree-ABCD-论文讨论`. The customer returns to `/wechat`, chooses that
+registered group plus a project and session, and generates a one-time code.
 They send the code only in the named group. The local LabCanvas adapter checks
-the exact group identity and claims the code; Cloud binds that group to the
-selected project and session. Cloud does not create the WeChat group or invite
-people. Later, a new code sent in that same group switches only its binding.
+the registered group-name prefix and exact Cloud group identity before claiming
+the code; Cloud binds that group to the selected project and session. Cloud
+does not create the WeChat group or invite people. Later, a new code sent in
+that same group switches only its binding.
 
 Result files use a single Cloud delivery plan shared with the Customer Service
 Gateway: text parts are at most 1,800 UTF-8 bytes, the result uses at most five

@@ -124,14 +124,15 @@ for the legacy pilot and does not need customer IDs added by hand.
 
 New groups are registered on the authenticated OverTree `/wechat` page. A user
 creates a group slot there; Cloud assigns a UUID and a unique visible name such
-as `OverTree-G-7K4Q2M`. Customer support creates the ordinary WeChat group,
-adds the Agent account, and sets the title to that exact name. The monitor
-refreshes the signed registry every 30 seconds and opens only that exact title.
+as `OverTree-ABCD`. Customer support creates the ordinary WeChat group, adds
+the Agent account, and may append a readable suffix such as
+`OverTree-ABCD-论文讨论`. The monitor refreshes the signed registry every 30
+seconds and accepts only the registered `OverTree-ABCD` prefix.
 The user then selects that slot when generating a code. Cloud stores the slot
 UUID with the code, so a code pasted into any other registered group is
-rejected and remains usable in its intended group. Do not rename or reuse a
-registered title for another WeChat group. A user's groups and bindings remain
-isolated by Cloud account, group UUID, and per-group local state file.
+rejected and remains usable in its intended group. Do not reuse a registered
+prefix for another WeChat group. A user's groups and bindings remain isolated
+by Cloud account, group UUID, and per-group local state file.
 
 This registry flow is implemented in the checked-out Cloud and LabCanvas source,
 but the Cloud release has not been deployed. Until it is deployed and
@@ -227,14 +228,15 @@ Follow these steps only after the OCR one-shot pass has validated the exact
 group title and Cloud route.
 
 1. In OverTree `/wechat`, select **个人微信辅导群** and create a dedicated
-   group name. Send that exact title to support.
+   four-character group name. Send the generated prefix to support.
 2. Support creates a normal WeChat group, adds the customer, support members,
-   and the Agent account, then sets the exact generated title. Keep it fixed.
+   and the Agent account, then names it with the generated prefix. A suffix may
+   be added for human readability, for example `OverTree-ABCD-论文讨论`.
 3. On `/wechat`, choose the registered group, project/session, and idle period;
    generate a one-time code. Send that code only in this group. Cloud binds it
    only to the group's UUID. Customer Service remains a separate entrance.
 4. The monitor discovers the registration on its next refresh, validates the
-   exact visible title, and replies with a binding confirmation. Later, a new
+   registered visible prefix, and replies with a binding confirmation. Later, a new
    code for this same group switches only its project/session. Other groups'
    messages, files, and session state remain isolated.
 5. Verify one addressed question and the returned text in the same group.

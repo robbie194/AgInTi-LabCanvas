@@ -1361,6 +1361,18 @@ class WeChatGuiSendTests(unittest.TestCase):
 
         self.assertTrue(module.title_identity_matches("陳苗", ["陈苗"]))
 
+    def test_registered_group_title_prefix_accepts_customer_suffix(self):
+        module = load_wechat_gui_send()
+
+        self.assertTrue(module.title_identity_matches(
+            "OverTree-ABCD-论文讨论",
+            ["OverTree-ABCD", "OverTree-ABCD-"],
+        ))
+        self.assertFalse(module.title_identity_matches(
+            "OverTree-ABCE-论文讨论",
+            ["OverTree-ABCD", "OverTree-ABCD-"],
+        ))
+
     def test_visible_chat_list_match_accepts_separator_ocr_variant(self):
         module = load_wechat_gui_send()
         tsv = "\n".join(
