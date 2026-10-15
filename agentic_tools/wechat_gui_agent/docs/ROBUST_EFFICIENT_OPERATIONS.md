@@ -152,17 +152,16 @@ skips GUI navigation and OCR; a changed screen or the bounded
 `WECHAT_OCR_GROUP_ACTIVE_RESCAN_SECONDS` safety interval (180 seconds by
 default) starts an active pass. Empty-screen Cloud polls still reconcile
 already-submitted tasks and the reply outbox without taking over the chat UI.
-For registered groups, pass the group's `allow_search` setting through to the
-GUI locator so it can find a registered generated title that is not in the
-visible chat list. New four-character titles use a stable `OverTree-ABCD`
-prefix and may have a customer suffix such as `-论文讨论`; the locator accepts
-that configured prefix while still rejecting other groups. The OCR monitor
-may temporarily satisfy the locator's global-search gate only when the
-Cloud-registered group ID and generated prefix agree; this scope ends after
-that one lookup. Other targets still require the operator to set
-`WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH=1`. The configured title-prefix guard
-must pass before OCR reads the selected conversation, and a failed title check
-stops that scan.
+Cloud returns only groups with an active binding or an unexpired first-binding
+code; revoked groups, expired pending registrations, and orphaned groups are
+excluded. Every active pass first OCR-matches the exact configured title in
+the visible chat list, then checks red pixels only in that row. Without that
+row's unread badge, it does not open the conversation or type any title into
+WeChat's global search box. Search fallback is disabled for this OCR ingress,
+including bound groups. A pending first-binding group is processed only when
+its own visible row is unread, and its standalone code remains the only message
+accepted before binding. The opened title guard still must pass before OCR reads
+the selected conversation; a failed title check stops that scan.
 Read Tesseract TSV as unquoted fields: OCR may return a literal unmatched
 double quote in a chat preview, which must not hide later registered group-title
 rows from the selector. After the title-prefix guard succeeds, OCR locates

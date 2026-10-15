@@ -166,9 +166,9 @@ sudo -u overtree-wechat env HOME=/home/overtree-wechat \
 ```
 
 Run the same command again with `--enable`; this marks the private config
-active and sets `WECHAT_OCR_GROUP_ENABLED=true`. Keep
-`WECHAT_OCR_GROUP_REQUIRE_BADGE=0` and `WECHAT_OCR_DEDUP_SECONDS=900` for the
-first test. Then run one guarded pass:
+active and sets `WECHAT_OCR_GROUP_ENABLED=true`. The monitor now always requires
+the exact row's unread badge; `WECHAT_OCR_DEDUP_SECONDS=900` remains the default.
+Then run one guarded pass (the test group must be visible with an unread badge):
 
 ```bash
 sudo -u overtree-wechat env HOME=/home/overtree-wechat \
@@ -181,13 +181,22 @@ sudo -u overtree-wechat env HOME=/home/overtree-wechat \
 
 For Cloud-registered groups, set `WECHAT_OCR_GROUP_REMOTE_SYNC=true` in the
 private local environment and reload monitors after deploying the matching
-Cloud version. The loop discovers those registered titles itself. Every
+Cloud version. Cloud returns only groups with an active binding or an
+unexpired first-binding code; revoked groups, expired pending registrations,
+and groups with no binding/code are omitted. Every
 `WECHAT_OCR_GROUP_INTERVAL` (3 seconds by default), it takes a local screenshot
 of the Agent-WeChat desktop, reduces the conversation-list/chat-tail crop to a
 quantized 96x64 signature, and compares its hash with the previous sample. An
 unchanged screen skips group navigation and OCR. A changed screen, new group
 configuration, or the `WECHAT_OCR_GROUP_ACTIVE_RESCAN_SECONDS` safety interval
-(180 seconds by default) starts an active pass over exact configured titles.
+(180 seconds by default) starts an active pass. Each configured title is first
+matched against the visible chat list; the monitor proceeds only when that
+exact row has its own red unread badge. It never types a group title into
+WeChat's global search box. Pending first-binding groups can receive their
+one-time code only while visible with an unread badge. An unbound group with
+no valid code, an expired registration, and a revoked group are not searched
+or scanned. Already-running Cloud tasks and queued replies continue to be
+reconciled during idle passes without opening a chat.
 Already-running Cloud tasks and queued replies continue to be reconciled during
 idle passes without opening a chat.
 
@@ -200,8 +209,9 @@ submitted message, including its line breaks; OCR text remains the fallback if
 the menu or clipboard check fails. A standalone eight-character binding code
 continues to be accepted from OCR. The same normalized message is suppressed for 15
 minutes by default (`WECHAT_OCR_DEDUP_SECONDS`); an eligible changed message
-can enter immediately. The unread red-marker option is still a best-effort
-heuristic, not a title or identity check. Inbound images and files are
+can enter immediately. The red-marker check is a local pixel heuristic scoped
+to the exact OCR-matched chat-list row; title verification remains mandatory
+before reading or sending. Inbound images and files are
 intentionally not read in this first OCR path. Text replies from OCR groups
 click the visible bottom-right Send control in X desktop coordinates and verify
 that the draft cleared; this route does not require a native WeChat database

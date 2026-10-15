@@ -11,7 +11,6 @@ adapter. Replies and artifacts use that adapter's guarded GUI sender.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 from datetime import datetime
 import hashlib
 import json
@@ -22,7 +21,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from typing import Any, Iterator
+from typing import Any
 
 import wechat_gui_send as gui
 from file_lock import fcntl_compat as fcntl
@@ -75,7 +74,12 @@ def main() -> int:
     )
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--loop", action="store_true")
-    parser.add_argument("--require-unread-badge", action="store_true", help="Only open rows with a visible red unread marker.")
+    parser.add_argument(
+        "--require-unread-badge",
+        action="store_true",
+        default=True,
+        help="Only open an exact configured group row when its own unread badge is visible (always on).",
+    )
     parser.add_argument("--send", action="store_true", help="Required for live Cloud submission and guarded replies.")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
@@ -110,33 +114,42 @@ def discover_configs(raw: str) -> list[Path]:
 
 def scan_once(args: argparse.Namespace, configs: list[Path]) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
-    local_group_ids: set[str] = set()
-    prepared: list[tuple[dict[str, Any], Path]] = []
+    local_configs: dict[str, tuple[dict[str, Any], Path]] = {}
     for path in configs:
         try:
             config = json.loads(path.read_text(encoding="utf-8"))
-            local_group_ids.add(str(config.get("chatroom_id") or ""))
-            prepared.append((config, path))
+            group_id = str(config.get("chatroom_id") or "").lower()
+            if group_id:
+                local_configs[group_id] = (config, path)
         except Exception as exc:
             results.append({"ok": False, "config": str(path), "error": f"{type(exc).__name__}: {str(exc)[:500]}"})
+    prepared: list[tuple[dict[str, Any], Path]] = []
     if remote_group_sync_enabled():
         try:
             registered = registered_group_configs()
         except Exception as exc:
             results.append({"ok": False, "registry": "cloud", "error": f"{type(exc).__name__}: {str(exc)[:500]}"})
-            registered = []
+            # A stale local config must never bring a revoked, expired, or
+            # otherwise unregistered group back into the active scan set.
+            registered = None
+        if registered is None:
+            return results
         # Cloud returns registrations oldest first.  Scan the newest groups
         # first so a newly generated connection code is handled promptly even
-        # when older groups are temporarily slow to open in the GUI.
+        # when older groups are temporarily slow to open in the GUI. Cloud is
+        # also the sole admission source: local files only preserve their
+        # existing private state path and cannot re-enable stale registrations.
         for config in reversed(registered):
-            group_id = str(config.get("chatroom_id") or "")
-            if group_id in local_group_ids:
-                continue
+            group_id = str(config.get("chatroom_id") or "").lower()
+            local = local_configs.get(group_id)
+            if local:
+                local_path = str(local[0].get("state_path") or "").strip()
+                if local_path:
+                    config["state_path"] = local_path
             path = PRIVATE / f"{group_id}-registered-group.json"
-            try:
-                prepared.append((config, path))
-            except Exception as exc:
-                results.append({"ok": False, "config": str(path), "error": f"{type(exc).__name__}: {str(exc)[:500]}"})
+            prepared.append((config, path))
+    else:
+        prepared.extend(local_configs.values())
 
     if not prepared:
         return results
@@ -338,7 +351,13 @@ def registered_group_configs(*, force_refresh: bool = False) -> list[dict[str, A
                 continue
             group_id = str(group.get("groupId") or "").lower()
             title = str(group.get("title") or "").strip()
+            binding_status = str(group.get("bindingStatus") or "unbound").strip().lower()
             if not GROUP_ID_RE.fullmatch(group_id) or not GROUP_TITLE_RE.fullmatch(title):
+                continue
+            # Cloud includes only groups with a live binding or an unexpired
+            # one-time code awaiting its first claim. Dormant registrations and
+            # revoked/unpaired groups never enter the local scan list.
+            if binding_status not in {"bound", "pending"}:
                 continue
             allowed_ids.add(group_id)
             triggers = [value.strip() for value in str(
@@ -358,7 +377,10 @@ def registered_group_configs(*, force_refresh: bool = False) -> list[dict[str, A
                     "query": title,
                     "expected_title": title,
                     "expected_title_aliases": [f"{title}-"],
-                    "allow_search": True,
+                    # Inbound scanning never uses search. Keep the registered
+                    # binding bit on the config so the outbound sender can
+                    # locate a bound target when a completed Cloud reply is due.
+                    "allow_search": binding_status == "bound",
                 },
                 "personal_group_cloud": {
                     "enabled": True,
@@ -368,6 +390,7 @@ def registered_group_configs(*, force_refresh: bool = False) -> list[dict[str, A
                 "chat_region": {"left": 390, "top": 100, "right": 0, "bottom": 170},
                 "ocr_psm": 11,
                 "group_registration_id": group_id,
+                "binding_status": binding_status,
             })
         os.environ["WECHAT_PERSONAL_GROUP_ALLOWLIST"] = ",".join(sorted(allowed_ids))
         _REMOTE_GROUP_CACHE.update({"fetched_at": now, "configs": configs, "error": ""})
@@ -412,7 +435,10 @@ def scan_group(
             window = gui.wait_for_main_wechat_window(env, timeout=10)
             if not window or window.width < 500 or window.height < 500:
                 raise RuntimeError("WECHAT_ENTRY_REQUIRED: the Agent WeChat window is not ready")
-            unread_gate_passed = not args.require_unread_badge or has_unread_badge(env, window, target, evidence)
+            # The group must already be visible in the chat list and its own row
+            # must carry a red unread marker. This prevents idle global search
+            # and avoids treating an unrelated group's badge as a trigger.
+            unread_gate_passed = has_unread_badge(env, window, target, evidence)
             if unread_gate_passed:
                 # Serialize navigation, bubble Copy, and clipboard access with every
                 # other GUI sender on this isolated WeChat desktop.
@@ -421,16 +447,15 @@ def scan_group(
                     original_title_regions = gui.title_crop_regions
                     gui.title_crop_regions = ocr_title_crop_regions
                     try:
-                        with registered_group_search_scope(config, target):
-                            opened_result = gui.open_target(
-                                env, window, target, pause=float(config.get("open_pause_seconds") or 0.6),
-                                out_dir=evidence, shot_prefix="ocr-open", skip_title_guard=False,
-                                # Only a Cloud-registered group with a matching
-                                # generated title receives a scoped search opt-in.
-                                # Other targets still need the operator-level gate.
-                                prefer_current=True, allow_search=target.allow_search,
-                                fail_closed_after_visible_match=True,
-                            )
+                        opened_result = gui.open_target(
+                            env, window, target, pause=float(config.get("open_pause_seconds") or 0.6),
+                            out_dir=evidence, shot_prefix="ocr-open", skip_title_guard=False,
+                            # Only a visible unread row may be opened. Search
+                            # fallback is intentionally disabled for this GUI
+                            # ingress so idle groups never populate the search box.
+                            prefer_current=True, allow_search=False,
+                            fail_closed_after_visible_match=True,
+                        )
                     finally:
                         gui.title_crop_regions = original_title_regions
                     if not opened_result.get("ok"):
@@ -506,41 +531,6 @@ def target_from_config(config: dict[str, Any], chat_name: str) -> gui.TargetSpec
         "allow_title_guard_fallback": bool(raw.get("allow_title_guard_fallback", False)),
         "allow_search": bool(raw.get("allow_search", False)),
     })
-
-
-@contextmanager
-def registered_group_search_scope(config: dict[str, Any], target: gui.TargetSpec) -> Iterator[bool]:
-    """Temporarily permit search only for a Cloud-registered generated group.
-
-    WeChat's locator uses the account-wide search surface. Keep its global
-    operator switch closed for every other caller, but allow the OCR monitor to
-    locate one registered group whose stable ID and exact generated title agree.
-    The locator still has to pass its registered title-prefix guard before OCR
-    can read it.
-    """
-    group_id = str(config.get("chatroom_id") or "").lower()
-    registered_id = str(config.get("group_registration_id") or "").lower()
-    chat_name = str(config.get("chat_name") or "").strip()
-    expected_title = str(target.expected_title or "").strip()
-    allowed = (
-        target.allow_search
-        and bool(GROUP_ID_RE.fullmatch(group_id))
-        and registered_id == group_id
-        and bool(GROUP_TITLE_RE.fullmatch(expected_title))
-        and chat_name == expected_title
-    )
-    env_key = "WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH"
-    previous = os.environ.get(env_key)
-    if allowed:
-        os.environ[env_key] = "1"
-    try:
-        yield allowed
-    finally:
-        if allowed:
-            if previous is None:
-                os.environ.pop(env_key, None)
-            else:
-                os.environ[env_key] = previous
 
 
 def ocr_title_crop_regions(window: gui.Window) -> list[dict[str, int | str]]:
@@ -887,7 +877,7 @@ def chat_region(window: gui.Window, config: dict[str, Any]) -> dict[str, int]:
 
 
 def has_unread_badge(env: dict[str, str], window: gui.Window, target: gui.TargetSpec, evidence: Path) -> bool:
-    """Best-effort red-marker check; title matching remains the hard guard."""
+    """Require a red marker in the exact configured chat-list row."""
     region = gui.chat_list_crop_region(window)
     if not region:
         return False
@@ -895,15 +885,64 @@ def has_unread_badge(env: dict[str, str], window: gui.Window, target: gui.Target
     crop = evidence / "badge-list.png"
     gui.screenshot(env, source)
     run_command(["convert", str(source), "-crop", f"{region['width']}x{region['height']}+{region['left']}+{region['top']}", str(crop)], env)
-    # The row is already selected/opened, so this is intentionally only a
-    # conservative advisory gate. Pixel matching avoids another OCR pass.
     try:
         from PIL import Image
+        tsv = run_command(
+            ["tesseract", str(crop), "stdout", "-l", "chi_sim+chi_tra+eng", "--psm", "11", "tsv"],
+            env,
+            check=False,
+        ).stdout
+        match = gui.visible_chat_list_match_from_tsv(tsv, target)
+        if not match:
+            return False
         image = Image.open(crop).convert("RGB")
-        red = sum(1 for r, g, b in image.getdata() if r > 170 and r > g * 1.35 and r > b * 1.35 and g < 150)
-        return red >= int(os.environ.get("WECHAT_OCR_MIN_RED_PIXELS", "8"))
+        row_y = int(float(match["center_y"]))
+        y0, y1 = max(0, row_y - 22), min(image.height, row_y + 22)
+        if y1 <= y0:
+            return False
+        return red_badge_component_present(
+            image.crop((0, y0, image.width, y1)),
+            min_pixels=max(8, int(os.environ.get("WECHAT_OCR_MIN_RED_PIXELS", "12"))),
+        )
     except Exception:
         return False
+
+
+def red_badge_component_present(image: Any, *, min_pixels: int) -> bool:
+    """Detect one compact red badge; isolated red OCR/text pixels do not count."""
+    width, height = image.size
+    pixels = image.load()
+    visited: set[tuple[int, int]] = set()
+    for y in range(height):
+        for x in range(width):
+            r, g, b = pixels[x, y]
+            if (x, y) in visited or not (r > 170 and r > g * 1.35 and r > b * 1.35 and g < 150):
+                continue
+            stack = [(x, y)]
+            visited.add((x, y))
+            count = 0
+            min_x = max_x = x
+            min_y = max_y = y
+            while stack:
+                px, py = stack.pop()
+                count += 1
+                min_x, max_x = min(min_x, px), max(max_x, px)
+                min_y, max_y = min(min_y, py), max(max_y, py)
+                # Bound growth early so a red theme accent cannot become a
+                # badge merely by connecting a large part of the chat row.
+                if count > 500 or max_x - min_x > 34 or max_y - min_y > 24:
+                    break
+                for ny in range(max(0, py - 1), min(height, py + 2)):
+                    for nx in range(max(0, px - 1), min(width, px + 2)):
+                        if (nx, ny) in visited:
+                            continue
+                        nr, ng, nb = pixels[nx, ny]
+                        if nr > 170 and nr > ng * 1.35 and nr > nb * 1.35 and ng < 150:
+                            visited.add((nx, ny))
+                            stack.append((nx, ny))
+            if count >= min_pixels and max_x - min_x <= 34 and max_y - min_y <= 24:
+                return True
+    return False
 
 
 def build_ocr_row(config: dict[str, Any], state: dict[str, Any], text: str) -> tuple[dict[str, Any], str]:
@@ -946,7 +985,33 @@ def send_gui_message(config: dict[str, Any], message: str) -> str:
     from wechat_direct_chatops import send_gui_message as sender
     send_config = dict(config)
     send_config["_visual_only_send"] = str(config.get("ingress") or "") == "ocr_gui"
-    return sender(send_config, message)
+    # A queued Cloud answer is an active delivery, distinct from passive
+    # inbound monitoring. Only a Cloud-registered, already-bound group gets a
+    # narrowly scoped global-search allowance for that outbound send.
+    target = send_config.get("send_target") if isinstance(send_config.get("send_target"), dict) else {}
+    group_id = str(send_config.get("chatroom_id") or "").lower()
+    registered_id = str(send_config.get("group_registration_id") or "").lower()
+    title = str(send_config.get("chat_name") or "").strip()
+    expected = str(target.get("expected_title") or "").strip()
+    allowed = (
+        str(send_config.get("binding_status") or "") == "bound"
+        and bool(GROUP_ID_RE.fullmatch(group_id))
+        and registered_id == group_id
+        and bool(GROUP_TITLE_RE.fullmatch(expected))
+        and title == expected
+    )
+    if not allowed:
+        return sender(send_config, message)
+    env_key = "WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH"
+    previous = os.environ.get(env_key)
+    os.environ[env_key] = "1"
+    try:
+        return sender(send_config, message)
+    finally:
+        if previous is None:
+            os.environ.pop(env_key, None)
+        else:
+            os.environ[env_key] = previous
 
 
 def send_gui_file(config: dict[str, Any], path: Path) -> str:

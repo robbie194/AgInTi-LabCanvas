@@ -407,7 +407,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         fake_client = type("FakeRegistryClient", (), {
             "list_registered_groups": lambda _self: {
                 "ok": True,
-                "groups": [{"groupId": group_id, "title": "OverTree-G-7K4Q2M"}],
+                "groups": [{"groupId": group_id, "title": "OverTree-G-7K4Q2M", "bindingStatus": "bound"}],
             },
         })()
         cloud = sys.modules["wechat_personal_group_cloud"]
@@ -436,7 +436,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         fake_client = type("FakeRegistryClient", (), {
             "list_registered_groups": lambda _self: {
                 "ok": True,
-                "groups": [{"groupId": group_id, "title": "OverTree-ABCD"}],
+                "groups": [{"groupId": group_id, "title": "OverTree-ABCD", "bindingStatus": "bound"}],
             },
         })()
         cloud = sys.modules["wechat_personal_group_cloud"]
@@ -448,6 +448,70 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         target = configs[0]["send_target"]
         self.assertEqual(target["expected_title"], "OverTree-ABCD")
         self.assertEqual(target["expected_title_aliases"], ["OverTree-ABCD-"])
+        self.assertTrue(target["allow_search"])
+
+    def test_unbound_registered_group_is_visible_badge_only_and_never_searchable(self):
+        module = load_module()
+        group_id = "7e3e4567-e89b-42d3-a456-426614174000"
+        fake_client = type("FakeRegistryClient", (), {
+            "list_registered_groups": lambda _self: {
+                "ok": True,
+                "groups": [{"groupId": group_id, "title": "OverTree-ABCD", "bindingStatus": "pending"}],
+            },
+        })()
+        cloud = sys.modules["wechat_personal_group_cloud"]
+        with mock.patch.dict(os.environ, {"WECHAT_OCR_GROUP_REMOTE_SYNC": "true"}), \
+             mock.patch.object(cloud, "build_registry_client", return_value=fake_client):
+            module._REMOTE_GROUP_CACHE.update({"fetched_at": 0.0, "configs": [], "error": ""})
+            configs = module.registered_group_configs(force_refresh=True)
+
+        self.assertEqual(configs[0]["binding_status"], "pending")
+        self.assertFalse(configs[0]["send_target"]["allow_search"])
+
+    def test_cloud_registry_is_the_only_admission_source_for_remote_sync(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            module.PRIVATE = root / "private"
+            module.PRIVATE.mkdir()
+            stale_path = root / "stale.json"
+            stale_path.write_text(json.dumps({
+                "chatroom_id": "7e3e4567-e89b-42d3-a456-426614174000",
+                "chat_name": "OverTree-OLD1",
+                "state_path": str(root / "kept-state.json"),
+            }), encoding="utf-8")
+            live = {
+                "chatroom_id": "7e3e4567-e89b-42d3-a456-426614174000",
+                "chat_name": "OverTree-LIVE",
+                "state_path": str(module.PRIVATE / "live-state.json"),
+            }
+            args = type("Args", (), {"display": ":97"})()
+            with mock.patch.object(module, "remote_group_sync_enabled", return_value=True), \
+                 mock.patch.object(module, "registered_group_configs", return_value=[live]), \
+                 mock.patch.object(module, "scan_display_groups", return_value=[]) as scan:
+                module.scan_once(args, [stale_path])
+
+        prepared = scan.call_args.args[2]
+        self.assertEqual(len(prepared), 1)
+        self.assertEqual(prepared[0][0]["chatroom_id"], live["chatroom_id"])
+        self.assertEqual(prepared[0][0]["state_path"], str(root / "kept-state.json"))
+
+    def test_cloud_registry_failure_does_not_fall_back_to_stale_local_groups(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            stale_path = Path(tmp) / "stale.json"
+            stale_path.write_text(json.dumps({
+                "chatroom_id": "7e3e4567-e89b-42d3-a456-426614174000",
+                "chat_name": "OverTree-OLD1",
+            }), encoding="utf-8")
+            args = type("Args", (), {"display": ":97"})()
+            with mock.patch.object(module, "remote_group_sync_enabled", return_value=True), \
+                 mock.patch.object(module, "registered_group_configs", side_effect=RuntimeError("registry unavailable")), \
+                 mock.patch.object(module, "scan_display_groups") as scan:
+                result = module.scan_once(args, [stale_path])
+
+        self.assertIn("registry unavailable", result[0]["error"])
+        scan.assert_not_called()
 
     def test_registered_group_sync_ignores_titles_outside_generated_name_policy(self):
         module = load_module()
@@ -473,6 +537,30 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
             self.assertEqual(module.send_gui_message({"ingress": "direct_chat"}, "回复"), "sent")
         self.assertTrue(captured[0][0]["_visual_only_send"])
         self.assertFalse(captured[1][0]["_visual_only_send"])
+
+    def test_only_bound_registered_group_reply_gets_scoped_search_for_delivery(self):
+        module = load_module()
+        observed = []
+        direct = types.ModuleType("wechat_direct_chatops")
+        direct.send_gui_message = lambda config, _message: observed.append(
+            (config["chat_name"], os.environ.get("WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH"))
+        ) or "sent"
+        registered = {
+            "ingress": "ocr_gui",
+            "binding_status": "bound",
+            "chat_name": "OverTree-ABCD",
+            "chatroom_id": "7e3e4567-e89b-42d3-a456-426614174000",
+            "group_registration_id": "7e3e4567-e89b-42d3-a456-426614174000",
+            "send_target": {"expected_title": "OverTree-ABCD", "allow_search": True},
+        }
+        pending = {**registered, "binding_status": "pending"}
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.dict(sys.modules, {"wechat_direct_chatops": direct}):
+            module.send_gui_message(registered, "reply")
+            module.send_gui_message(pending, "reply")
+            restored = os.environ.get("WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH")
+
+        self.assertEqual(observed, [("OverTree-ABCD", "1"), ("OverTree-ABCD", None)])
+        self.assertIsNone(restored)
 
     def test_unchanged_screen_path_polls_cloud_without_touching_wechat_gui(self):
         module = load_module()
@@ -574,6 +662,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
 
             with mock.patch.object(module.gui, "require_tools"), \
                  mock.patch.object(module.gui, "wait_for_main_wechat_window", return_value=window), \
+                 mock.patch.object(module, "has_unread_badge", return_value=True), \
                  mock.patch.object(module.gui, "open_target", return_value={"ok": True}), \
                  mock.patch.object(module, "ocr_triggered_message", return_value={
                      "text": "@OverTree 第一行\n第二行", "method": "native_copy",
@@ -590,7 +679,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         self.assertEqual(poll_cloud.call_args.args[2], [])
         self.assertEqual(len(saved["ocr_seen_fingerprints"]), 1)
 
-    def test_registered_group_search_keeps_exact_title_guard(self):
+    def test_registered_group_red_badge_scan_never_uses_global_search(self):
         module = load_module()
         with tempfile.TemporaryDirectory() as tmp:
             private = Path(tmp) / "private"
@@ -608,7 +697,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
                     "name": "OverTree-G-RMQG7F",
                     "query": "OverTree-G-RMQG7F",
                     "expected_title": "OverTree-G-RMQG7F",
-                    "allow_search": True,
+                    "allow_search": False,
                 },
                 "personal_group_cloud": {"enabled": True},
             }
@@ -629,6 +718,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {}, clear=True), \
                  mock.patch.object(module.gui, "require_tools"), \
                  mock.patch.object(module.gui, "wait_for_main_wechat_window", return_value=window), \
+                 mock.patch.object(module, "has_unread_badge", return_value=True), \
                  mock.patch.object(module.gui, "open_target", side_effect=reject_opened_target) as open_target, \
                  mock.patch.object(module, "ocr_triggered_message") as extract_message, \
                  mock.patch.object(module, "run_cloud_once") as poll_cloud:
@@ -637,15 +727,60 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["status"], "title_guard_failed")
-        self.assertTrue(open_target.call_args.kwargs["allow_search"])
-        self.assertEqual(global_search_at_open, [("1", True)])
+        self.assertFalse(open_target.call_args.kwargs["allow_search"])
+        self.assertEqual(global_search_at_open, [(None, False)])
         self.assertFalse(open_target.call_args.kwargs["skip_title_guard"])
         self.assertTrue(open_target.call_args.kwargs["fail_closed_after_visible_match"])
         extract_message.assert_not_called()
         poll_cloud.assert_not_called()
         self.assertIsNone(search_setting_restored)
 
-    def test_unregistered_group_does_not_receive_scoped_search_opt_in(self):
+    def test_group_without_its_own_unread_badge_never_opens_or_searches(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            private = Path(tmp) / "private"
+            private.mkdir()
+            module.PRIVATE = private
+            config = {
+                "enabled": True,
+                "ingress": "ocr_gui",
+                "chat_name": "OverTree-G-ABCD",
+                "chatroom_id": "7e3e4567-e89b-42d3-a456-426614174000",
+                "group_registration_id": "7e3e4567-e89b-42d3-a456-426614174000",
+                "binding_status": "bound",
+                "state_path": str(private / "group.state.json"),
+                "send_target": {"name": "OverTree-G-ABCD", "expected_title": "OverTree-G-ABCD", "allow_search": True},
+                "personal_group_cloud": {"enabled": True},
+            }
+            args = type("Args", (), {"display": ":97", "require_unread_badge": False})()
+            window = type("Window", (), {"x": 0, "y": 0, "width": 916, "height": 700})()
+            with mock.patch.object(module.gui, "require_tools"), \
+                 mock.patch.object(module.gui, "wait_for_main_wechat_window", return_value=window), \
+                 mock.patch.object(module, "has_unread_badge", return_value=False), \
+                 mock.patch.object(module.gui, "open_target") as open_target, \
+                 mock.patch.object(module, "ocr_triggered_message") as extract, \
+                 mock.patch.object(module, "run_cloud_once", return_value={"state": {}, "metrics": {}}):
+                result = module.scan_group(args, config, private / "group.json", scan_gui=True)
+
+        self.assertEqual(result["extraction_method"], "no_unread_badge")
+        open_target.assert_not_called()
+        extract.assert_not_called()
+
+    def test_red_badge_detection_requires_a_compact_connected_marker(self):
+        module = load_module()
+        from PIL import Image, ImageDraw
+
+        badge = Image.new("RGB", (120, 44), "white")
+        ImageDraw.Draw(badge).ellipse((82, 8, 89, 15), fill=(230, 30, 45))
+        text_pixels = Image.new("RGB", (120, 44), "white")
+        draw = ImageDraw.Draw(text_pixels)
+        for x in range(10, 100, 8):
+            draw.point((x, 11), fill=(230, 30, 45))
+
+        self.assertTrue(module.red_badge_component_present(badge, min_pixels=12))
+        self.assertFalse(module.red_badge_component_present(text_pixels, min_pixels=12))
+
+    def test_group_search_is_disabled_even_when_a_legacy_target_requests_it(self):
         module = load_module()
         target = module.gui.target_from_raw({
             "name": "OverTree-G-RMQG7F",
@@ -660,9 +795,8 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         }
 
         with mock.patch.dict(os.environ, {}, clear=True):
-            with module.registered_group_search_scope(config, target) as allowed:
-                self.assertFalse(allowed)
-                self.assertNotIn("WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH", os.environ)
+            self.assertFalse(module.gui.global_search_allowed(target.allow_search, target))
+            self.assertNotIn("WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH", os.environ)
 
 
 if __name__ == "__main__":

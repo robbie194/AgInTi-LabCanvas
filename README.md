@@ -74,9 +74,13 @@ The isolated `OvertreeAI 测试` OCR pilot is active and bound to its selected
 Cloud project/session. Its binding confirmation was verified in the group on
 2026-10-12 after fixing OCR-only text delivery. Other group configs stay
 disabled by default. The Cloud group-registration UI/API and compact group-name
-matching are deployed to the live Cloud service, and the Agent workstation's
-remote registry sync discovers new registrations automatically. The
-preconfigured pilot group remains available for backward compatibility.
+matching are deployed to the live Cloud service. The Agent workstation syncs
+only groups with an active binding or an unexpired first-binding code. The OCR
+monitor is idle unless that exact visible chat-list row has a red unread marker;
+it never uses WeChat's global search. A pending first-binding group can be
+opened only from its visible unread row to read the one-time code. The
+preconfigured pilot remains active through the same Cloud registration and
+binding checks.
 
 The customer signs in at `/wechat` and asks Cloud to generate a unique compact
 name such as `OverTree-ABCD`. A customer-service operator creates the ordinary
@@ -140,9 +144,10 @@ pending Cloud/Gateway/LabCanvas changes are deployed. OCR replies use the
 visible Send control in X desktop coordinates and verify that the composer
 clears; noVNC browser scaling does not change those coordinates. See
 [the OCR setup](docs/WECHAT_PERSONAL_GROUP_CLOUD.md#guiocr-group-ingress).
-For one Cloud-registered group at a time, the monitor may briefly enable title
-search when its registered group ID and generated title match. It verifies the
-exact configured title before reading messages; every other target still
+For OCR ingress, local OCR first matches the exact configured chat-list title
+and checks for a red unread marker in that row. Without that marker, the group
+is not opened and its title is never typed into WeChat search. The monitor
+verifies the opened title before reading messages; every other target still
 requires the explicit `WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH=1` operator setting.
 
 ## Quick Start
