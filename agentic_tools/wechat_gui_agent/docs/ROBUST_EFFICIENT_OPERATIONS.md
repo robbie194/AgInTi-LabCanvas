@@ -163,7 +163,9 @@ its own visible row is unread, and its standalone code remains the only message
 accepted before binding. The opened title guard still must pass before OCR reads
 the selected conversation; a failed title check stops that scan.
 Legacy pilot bindings without a group-slot row are checked by Cloud against
-only the exact UUIDs from existing local configs and their stored peer hashes;
+only the exact UUIDs or stable `ocr-title-<24 hex>` IDs from existing local
+configs and their stored peer hashes. Pending first-binding groups are returned
+only when their exact ID is already in the local allowlist;
 they cannot cause enumeration of other WeChat groups. Idle-expired bindings
 are excluded.
 Read Tesseract TSV as unquoted fields: OCR may return a literal unmatched

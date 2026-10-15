@@ -181,9 +181,12 @@ sudo -u overtree-wechat env HOME=/home/overtree-wechat \
 
 For Cloud-registered groups, set `WECHAT_OCR_GROUP_REMOTE_SYNC=true` in the
 private local environment and reload monitors after deploying the matching
-Cloud version. Cloud returns only groups with an active binding or an
-unexpired first-binding code; revoked groups, expired pending registrations,
-and groups with no binding/code are omitted. Every
+Cloud version. Cloud returns all currently bound groups, plus a pending
+first-binding group only when its exact group ID is already present in the
+local group config list and it has an unexpired code. This lets an operator
+explicitly prepare one new group without scanning every pending group in the
+account. Groups with no binding/code, expired pending registrations, and
+revoked groups are omitted. Every
 `WECHAT_OCR_GROUP_INTERVAL` (3 seconds by default), it takes a local screenshot
 of the Agent-WeChat desktop, reduces the conversation-list/chat-tail crop to a
 quantized 96x64 signature, and compares its hash with the previous sample. An
@@ -199,11 +202,12 @@ or scanned. Already-running Cloud tasks and queued replies continue to be
 reconciled during idle passes without opening a chat.
 
 Older pilot bindings may not have a registered Cloud group slot. In that case,
-the monitor asks Cloud to validate only UUIDs from its existing local group
-configs against active binding hashes. Cloud returns a legacy group only when
-that exact UUID still has a live binding; the local title remains the visual
-guard. This preserves the current pilot without discovering or scanning other
-personal-WeChat groups.
+the monitor asks Cloud to validate only group IDs from its existing local group
+configs against active binding hashes. This includes the OCR transport's
+stable `ocr-title-<24 hex>` IDs as well as registered UUIDs. Cloud returns a
+legacy group only when that exact ID still has a live binding; the local title
+remains the visual guard. This preserves the current pilot without discovering
+or scanning other personal-WeChat groups.
 
 During an active pass, OCR locates the newest configured `@OverTree` line. The
 monitor right-clicks inside that line's message bubble, identifies the native

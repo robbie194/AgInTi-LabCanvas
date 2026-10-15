@@ -42,6 +42,7 @@ PASSIVE_STATE_PREFIX = "wechat-ocr-passive"
 GUI_LOCK = PRIVATE / "wechat_gui_send.lock"
 CODE_RE = re.compile(r"(?<![A-Za-z0-9])[A-HJ-NP-Z2-9]{8}(?![A-Za-z0-9])", re.IGNORECASE)
 GROUP_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.IGNORECASE)
+LEGACY_LOCAL_GROUP_ID_RE = re.compile(r"^ocr-title-[a-f0-9]{24}$", re.IGNORECASE)
 # Cloud now allocates compact four-character titles. Keep the six-character
 # format accepted so groups created by an older Cloud release continue to
 # work. The registered value is always the stable prefix; a customer may add
@@ -363,16 +364,21 @@ def registered_group_configs(
             title = str(group.get("title") or "").strip()
             binding_status = str(group.get("bindingStatus") or "unbound").strip().lower()
             local = local_configs.get(group_id)
+            if binding_status == "pending" and not local:
+                # A first-time code is read only from an exact group the
+                # operator has already placed in the local allowlist. Never
+                # enumerate every pending Cloud group or search WeChat for it.
+                continue
             local_title = str(local[0].get("chat_name") or "").strip() if local else ""
             if not title and binding_status == "bound":
                 # A legacy binding may have no registered slot/title. Cloud
                 # confirms the exact local UUID; retain the operator's
                 # already-configured title for its visual GUI guard.
                 title = local_title
-            if not GROUP_ID_RE.fullmatch(group_id):
+            if not group_id_is_supported(group_id):
                 continue
-            # Cloud includes only groups with a live binding or an unexpired
-            # one-time code awaiting its first claim. Dormant registrations and
+            # Cloud includes bound groups and only locally requested groups
+            # with an unexpired first-binding code. Dormant registrations and
             # revoked/unpaired groups never enter the local scan list.
             if binding_status not in {"bound", "pending"}:
                 continue
@@ -560,6 +566,10 @@ def target_from_config(config: dict[str, Any], chat_name: str) -> gui.TargetSpec
         "allow_title_guard_fallback": bool(raw.get("allow_title_guard_fallback", False)),
         "allow_search": bool(raw.get("allow_search", False)),
     })
+
+
+def group_id_is_supported(group_id: str) -> bool:
+    return bool(GROUP_ID_RE.fullmatch(group_id) or LEGACY_LOCAL_GROUP_ID_RE.fullmatch(group_id))
 
 
 def ocr_title_crop_regions(window: gui.Window) -> list[dict[str, int | str]]:
@@ -1024,7 +1034,7 @@ def send_gui_message(config: dict[str, Any], message: str) -> str:
     expected = str(target.get("expected_title") or "").strip()
     allowed = (
         str(send_config.get("binding_status") or "") == "bound"
-        and bool(GROUP_ID_RE.fullmatch(group_id))
+        and group_id_is_supported(group_id)
         and registered_id == group_id
         and bool(GROUP_TITLE_RE.fullmatch(expected))
         and title == expected

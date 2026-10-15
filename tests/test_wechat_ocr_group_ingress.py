@@ -450,7 +450,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         self.assertEqual(target["expected_title_aliases"], ["OverTree-ABCD-"])
         self.assertTrue(target["allow_search"])
 
-    def test_unbound_registered_group_is_visible_badge_only_and_never_searchable(self):
+    def test_pending_group_requires_exact_local_allowlist_entry(self):
         module = load_module()
         group_id = "7e3e4567-e89b-42d3-a456-426614174000"
         fake_client = type("FakeRegistryClient", (), {
@@ -465,12 +465,20 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
             module._REMOTE_GROUP_CACHE.update({"fetched_at": 0.0, "configs": [], "error": ""})
             configs = module.registered_group_configs(force_refresh=True)
 
+        self.assertEqual(configs, [])
+
+        local = {group_id: ({"chat_name": "OverTree-ABCD"}, Path("/private/group.json"))}
+        with mock.patch.dict(os.environ, {"WECHAT_OCR_GROUP_REMOTE_SYNC": "true"}), \
+             mock.patch.object(cloud, "build_registry_client", return_value=fake_client):
+            module._REMOTE_GROUP_CACHE.update({"fetched_at": 0.0, "configs": [], "error": "", "local_group_key": ""})
+            configs = module.registered_group_configs(force_refresh=True, local_configs=local)
+
         self.assertEqual(configs[0]["binding_status"], "pending")
         self.assertFalse(configs[0]["send_target"]["allow_search"])
 
     def test_legacy_bound_group_uses_its_exact_existing_local_title(self):
         module = load_module()
-        group_id = "7e3e4567-e89b-42d3-a456-426614174000"
+        group_id = "ocr-title-000000000000000000000000"
         local_path = Path("/private/current-group.json")
         fake_client = type("FakeRegistryClient", (), {
             "list_registered_groups": lambda _self, group_ids=None: {
@@ -490,6 +498,8 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         self.assertEqual(configs[0]["chat_name"], "OvertreeAI 测试")
         self.assertEqual(configs[0]["binding_status"], "bound")
         self.assertTrue(configs[0]["send_target"]["allow_search"])
+        self.assertTrue(module.group_id_is_supported(group_id))
+        self.assertFalse(module.group_id_is_supported("ocr-title-not-a-stable-hash"))
 
     def test_cloud_registry_is_the_only_admission_source_for_remote_sync(self):
         module = load_module()
