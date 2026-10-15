@@ -58,7 +58,7 @@ OCR_DEBUG_ROW_RE = re.compile(
 )
 PASSIVE_SIGNATURE_SIZE = (96, 64)
 COPY_MENU_SCALE = 2.5
-_REMOTE_GROUP_CACHE: dict[str, Any] = {"fetched_at": 0.0, "configs": [], "error": ""}
+_REMOTE_GROUP_CACHE: dict[str, Any] = {"fetched_at": 0.0, "configs": [], "error": "", "local_group_key": ""}
 
 
 def main() -> int:
@@ -126,7 +126,7 @@ def scan_once(args: argparse.Namespace, configs: list[Path]) -> list[dict[str, A
     prepared: list[tuple[dict[str, Any], Path]] = []
     if remote_group_sync_enabled():
         try:
-            registered = registered_group_configs()
+            registered = registered_group_configs(local_configs=local_configs)
         except Exception as exc:
             results.append({"ok": False, "registry": "cloud", "error": f"{type(exc).__name__}: {str(exc)[:500]}"})
             # A stale local config must never bring a revoked, expired, or
@@ -324,20 +324,30 @@ def remote_group_sync_enabled() -> bool:
     return str(os.environ.get("WECHAT_OCR_GROUP_REMOTE_SYNC") or "false").lower() == "true"
 
 
-def registered_group_configs(*, force_refresh: bool = False) -> list[dict[str, Any]]:
+def registered_group_configs(
+    *,
+    force_refresh: bool = False,
+    local_configs: dict[str, tuple[dict[str, Any], Path]] | None = None,
+) -> list[dict[str, Any]]:
     """Fetch signed, Cloud-registered group titles and map them to stable IDs."""
     if not remote_group_sync_enabled():
         return []
+    local_configs = local_configs or {}
+    local_group_key = ",".join(sorted(local_configs))
     now = time.monotonic()
     ttl = max(10.0, float(os.environ.get("WECHAT_OCR_GROUP_REGISTRY_REFRESH_SECONDS", "30")))
-    if not force_refresh and now - float(_REMOTE_GROUP_CACHE.get("fetched_at") or 0) < ttl:
+    if (
+        not force_refresh
+        and _REMOTE_GROUP_CACHE.get("local_group_key") == local_group_key
+        and now - float(_REMOTE_GROUP_CACHE.get("fetched_at") or 0) < ttl
+    ):
         if _REMOTE_GROUP_CACHE.get("error"):
             raise PersonalGroupCloudError(str(_REMOTE_GROUP_CACHE["error"]))
         return list(_REMOTE_GROUP_CACHE.get("configs") or [])
     try:
         from wechat_personal_group_cloud import build_registry_client
 
-        response = build_registry_client().list_registered_groups()
+        response = build_registry_client().list_registered_groups(sorted(local_configs))
         raw_groups = response.get("groups")
         if response.get("ok") is not True or not isinstance(raw_groups, list):
             raise PersonalGroupCloudError("OverTree Cloud returned an invalid registered-group list.")
@@ -352,12 +362,21 @@ def registered_group_configs(*, force_refresh: bool = False) -> list[dict[str, A
             group_id = str(group.get("groupId") or "").lower()
             title = str(group.get("title") or "").strip()
             binding_status = str(group.get("bindingStatus") or "unbound").strip().lower()
-            if not GROUP_ID_RE.fullmatch(group_id) or not GROUP_TITLE_RE.fullmatch(title):
+            local = local_configs.get(group_id)
+            local_title = str(local[0].get("chat_name") or "").strip() if local else ""
+            if not title and binding_status == "bound":
+                # A legacy binding may have no registered slot/title. Cloud
+                # confirms the exact local UUID; retain the operator's
+                # already-configured title for its visual GUI guard.
+                title = local_title
+            if not GROUP_ID_RE.fullmatch(group_id):
                 continue
             # Cloud includes only groups with a live binding or an unexpired
             # one-time code awaiting its first claim. Dormant registrations and
             # revoked/unpaired groups never enter the local scan list.
             if binding_status not in {"bound", "pending"}:
+                continue
+            if not GROUP_TITLE_RE.fullmatch(title) and not (local and title == local_title and binding_status == "bound"):
                 continue
             allowed_ids.add(group_id)
             triggers = [value.strip() for value in str(
@@ -393,11 +412,21 @@ def registered_group_configs(*, force_refresh: bool = False) -> list[dict[str, A
                 "binding_status": binding_status,
             })
         os.environ["WECHAT_PERSONAL_GROUP_ALLOWLIST"] = ",".join(sorted(allowed_ids))
-        _REMOTE_GROUP_CACHE.update({"fetched_at": now, "configs": configs, "error": ""})
+        _REMOTE_GROUP_CACHE.update({
+            "fetched_at": now,
+            "configs": configs,
+            "error": "",
+            "local_group_key": local_group_key,
+        })
         return list(configs)
     except Exception as exc:
         error = str(exc)[:500] or type(exc).__name__
-        _REMOTE_GROUP_CACHE.update({"fetched_at": now, "configs": [], "error": error})
+        _REMOTE_GROUP_CACHE.update({
+            "fetched_at": now,
+            "configs": [],
+            "error": error,
+            "local_group_key": local_group_key,
+        })
         raise
 
 

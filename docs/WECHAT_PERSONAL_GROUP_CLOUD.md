@@ -197,8 +197,13 @@ one-time code only while visible with an unread badge. An unbound group with
 no valid code, an expired registration, and a revoked group are not searched
 or scanned. Already-running Cloud tasks and queued replies continue to be
 reconciled during idle passes without opening a chat.
-Already-running Cloud tasks and queued replies continue to be reconciled during
-idle passes without opening a chat.
+
+Older pilot bindings may not have a registered Cloud group slot. In that case,
+the monitor asks Cloud to validate only UUIDs from its existing local group
+configs against active binding hashes. Cloud returns a legacy group only when
+that exact UUID still has a live binding; the local title remains the visual
+guard. This preserves the current pilot without discovering or scanning other
+personal-WeChat groups.
 
 During an active pass, OCR locates the newest configured `@OverTree` line. The
 monitor right-clicks inside that line's message bubble, identifies the native

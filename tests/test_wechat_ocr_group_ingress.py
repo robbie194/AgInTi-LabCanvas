@@ -405,7 +405,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         module = load_module()
         group_id = "7e3e4567-e89b-42d3-a456-426614174000"
         fake_client = type("FakeRegistryClient", (), {
-            "list_registered_groups": lambda _self: {
+            "list_registered_groups": lambda _self, _group_ids=None: {
                 "ok": True,
                 "groups": [{"groupId": group_id, "title": "OverTree-G-7K4Q2M", "bindingStatus": "bound"}],
             },
@@ -434,7 +434,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         module = load_module()
         group_id = "7e3e4567-e89b-42d3-a456-426614174000"
         fake_client = type("FakeRegistryClient", (), {
-            "list_registered_groups": lambda _self: {
+            "list_registered_groups": lambda _self, _group_ids=None: {
                 "ok": True,
                 "groups": [{"groupId": group_id, "title": "OverTree-ABCD", "bindingStatus": "bound"}],
             },
@@ -454,7 +454,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         module = load_module()
         group_id = "7e3e4567-e89b-42d3-a456-426614174000"
         fake_client = type("FakeRegistryClient", (), {
-            "list_registered_groups": lambda _self: {
+            "list_registered_groups": lambda _self, _group_ids=None: {
                 "ok": True,
                 "groups": [{"groupId": group_id, "title": "OverTree-ABCD", "bindingStatus": "pending"}],
             },
@@ -467,6 +467,29 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
 
         self.assertEqual(configs[0]["binding_status"], "pending")
         self.assertFalse(configs[0]["send_target"]["allow_search"])
+
+    def test_legacy_bound_group_uses_its_exact_existing_local_title(self):
+        module = load_module()
+        group_id = "7e3e4567-e89b-42d3-a456-426614174000"
+        local_path = Path("/private/current-group.json")
+        fake_client = type("FakeRegistryClient", (), {
+            "list_registered_groups": lambda _self, group_ids=None: {
+                "ok": True,
+                "requested": group_ids,
+                "groups": [{"groupId": group_id, "title": "", "bindingStatus": "bound"}],
+            },
+        })()
+        cloud = sys.modules["wechat_personal_group_cloud"]
+        local = {group_id: ({"chat_name": "OvertreeAI 测试", "state_path": "/private/current.state.json"}, local_path)}
+        with mock.patch.dict(os.environ, {"WECHAT_OCR_GROUP_REMOTE_SYNC": "true"}), \
+             mock.patch.object(cloud, "build_registry_client", return_value=fake_client):
+            module._REMOTE_GROUP_CACHE.update({"fetched_at": 0.0, "configs": [], "error": "", "local_group_key": ""})
+            configs = module.registered_group_configs(force_refresh=True, local_configs=local)
+
+        self.assertEqual(len(configs), 1)
+        self.assertEqual(configs[0]["chat_name"], "OvertreeAI 测试")
+        self.assertEqual(configs[0]["binding_status"], "bound")
+        self.assertTrue(configs[0]["send_target"]["allow_search"])
 
     def test_cloud_registry_is_the_only_admission_source_for_remote_sync(self):
         module = load_module()
@@ -517,7 +540,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         module = load_module()
         cloud = sys.modules["wechat_personal_group_cloud"]
         fake_client = type("FakeRegistryClient", (), {
-            "list_registered_groups": lambda _self: {
+            "list_registered_groups": lambda _self, _group_ids=None: {
                 "ok": True,
                 "groups": [{"groupId": "7e3e4567-e89b-42d3-a456-426614174000", "title": "Customer private group"}],
             },
