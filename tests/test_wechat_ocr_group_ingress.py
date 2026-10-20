@@ -405,7 +405,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         module = load_module()
         group_id = "7e3e4567-e89b-42d3-a456-426614174000"
         fake_client = type("FakeRegistryClient", (), {
-            "list_registered_groups": lambda _self, _group_ids=None: {
+            "list_registered_groups": lambda _self, _group_ids=None, **_kwargs: {
                 "ok": True,
                 "groups": [{"groupId": group_id, "title": "OverTree-G-7K4Q2M", "bindingStatus": "bound"}],
             },
@@ -420,7 +420,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
              mock.patch.object(module, "PRIVATE", Path(tmp)), \
              mock.patch.object(cloud, "build_registry_client", return_value=fake_client):
             module._REMOTE_GROUP_CACHE.update({"fetched_at": 0.0, "configs": [], "error": ""})
-            configs = module.registered_group_configs(force_refresh=True)
+            configs = module.registered_group_configs(force_refresh=True, visible_titles=[])
             allowlist = os.environ["WECHAT_PERSONAL_GROUP_ALLOWLIST"]
 
         self.assertEqual(len(configs), 1)
@@ -430,11 +430,27 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         self.assertIn(group_id, allowlist)
         self.assertIn("legacy-group", allowlist)
 
+    def test_discovery_failure_preserves_bound_registry_reconciliation(self):
+        module = load_module()
+        group_id = "7e3e4567-e89b-42d3-a456-426614174000"
+        client = mock.Mock()
+        client.list_registered_groups.return_value = {"ok": True, "groups": [
+            {"groupId": group_id, "title": "OverTree-ABCD", "bindingStatus": "bound"},
+        ]}
+        cloud = sys.modules["wechat_personal_group_cloud"]
+        with mock.patch.dict(os.environ, {"WECHAT_OCR_GROUP_REMOTE_SYNC": "true"}), \
+             mock.patch.object(module, "visible_unread_group_titles", side_effect=RuntimeError("capture failed")), \
+             mock.patch.object(cloud, "build_registry_client", return_value=client):
+            configs = module.registered_group_configs(force_refresh=True)
+        self.assertEqual(configs[0]["chatroom_id"], group_id)
+        self.assertIn("capture failed", module._REMOTE_GROUP_CACHE["discovery_error"])
+        client.list_registered_groups.assert_called_once_with([], pending_titles=[])
+
     def test_registered_compact_group_allows_customer_title_suffix(self):
         module = load_module()
         group_id = "7e3e4567-e89b-42d3-a456-426614174000"
         fake_client = type("FakeRegistryClient", (), {
-            "list_registered_groups": lambda _self, _group_ids=None: {
+            "list_registered_groups": lambda _self, _group_ids=None, **_kwargs: {
                 "ok": True,
                 "groups": [{"groupId": group_id, "title": "OverTree-ABCD", "bindingStatus": "bound"}],
             },
@@ -443,18 +459,18 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"WECHAT_OCR_GROUP_REMOTE_SYNC": "true"}), \
              mock.patch.object(cloud, "build_registry_client", return_value=fake_client):
             module._REMOTE_GROUP_CACHE.update({"fetched_at": 0.0, "configs": [], "error": ""})
-            configs = module.registered_group_configs(force_refresh=True)
+            configs = module.registered_group_configs(force_refresh=True, visible_titles=[])
 
         target = configs[0]["send_target"]
         self.assertEqual(target["expected_title"], "OverTree-ABCD")
         self.assertEqual(target["expected_title_aliases"], ["OverTree-ABCD-"])
         self.assertTrue(target["allow_search"])
 
-    def test_pending_group_requires_exact_local_allowlist_entry(self):
+    def test_pending_group_requires_local_id_or_observed_unread_title(self):
         module = load_module()
         group_id = "7e3e4567-e89b-42d3-a456-426614174000"
         fake_client = type("FakeRegistryClient", (), {
-            "list_registered_groups": lambda _self, _group_ids=None: {
+            "list_registered_groups": lambda _self, _group_ids=None, **_kwargs: {
                 "ok": True,
                 "groups": [{"groupId": group_id, "title": "OverTree-ABCD", "bindingStatus": "pending"}],
             },
@@ -463,15 +479,24 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"WECHAT_OCR_GROUP_REMOTE_SYNC": "true"}), \
              mock.patch.object(cloud, "build_registry_client", return_value=fake_client):
             module._REMOTE_GROUP_CACHE.update({"fetched_at": 0.0, "configs": [], "error": ""})
-            configs = module.registered_group_configs(force_refresh=True)
+            configs = module.registered_group_configs(force_refresh=True, visible_titles=[])
 
         self.assertEqual(configs, [])
+
+        with mock.patch.dict(os.environ, {"WECHAT_OCR_GROUP_REMOTE_SYNC": "true"}), \
+             mock.patch.object(cloud, "build_registry_client", return_value=fake_client):
+            configs = module.registered_group_configs(force_refresh=True, visible_titles=["OverTree-ABCD"])
+        self.assertEqual(len(configs), 1)
+        self.assertEqual(configs[0]["chatroom_id"], group_id)
+        self.assertEqual(configs[0]["binding_status"], "pending")
+        self.assertFalse(configs[0]["send_target"]["allow_search"])
+        self.assertEqual(Path(configs[0]["state_path"]).name, f"{group_id}-ocr.state.json")
 
         local = {group_id: ({"chat_name": "OverTree-ABCD"}, Path("/private/group.json"))}
         with mock.patch.dict(os.environ, {"WECHAT_OCR_GROUP_REMOTE_SYNC": "true"}), \
              mock.patch.object(cloud, "build_registry_client", return_value=fake_client):
             module._REMOTE_GROUP_CACHE.update({"fetched_at": 0.0, "configs": [], "error": "", "local_group_key": ""})
-            configs = module.registered_group_configs(force_refresh=True, local_configs=local)
+            configs = module.registered_group_configs(force_refresh=True, local_configs=local, visible_titles=[])
 
         self.assertEqual(configs[0]["binding_status"], "pending")
         self.assertFalse(configs[0]["send_target"]["allow_search"])
@@ -481,7 +506,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         group_id = "ocr-title-000000000000000000000000"
         local_path = Path("/private/current-group.json")
         fake_client = type("FakeRegistryClient", (), {
-            "list_registered_groups": lambda _self, group_ids=None: {
+            "list_registered_groups": lambda _self, group_ids=None, **_kwargs: {
                 "ok": True,
                 "requested": group_ids,
                 "groups": [{"groupId": group_id, "title": "", "bindingStatus": "bound"}],
@@ -492,7 +517,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"WECHAT_OCR_GROUP_REMOTE_SYNC": "true"}), \
              mock.patch.object(cloud, "build_registry_client", return_value=fake_client):
             module._REMOTE_GROUP_CACHE.update({"fetched_at": 0.0, "configs": [], "error": "", "local_group_key": ""})
-            configs = module.registered_group_configs(force_refresh=True, local_configs=local)
+            configs = module.registered_group_configs(force_refresh=True, local_configs=local, visible_titles=[])
 
         self.assertEqual(len(configs), 1)
         self.assertEqual(configs[0]["chat_name"], "OvertreeAI 测试")
@@ -550,7 +575,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         module = load_module()
         cloud = sys.modules["wechat_personal_group_cloud"]
         fake_client = type("FakeRegistryClient", (), {
-            "list_registered_groups": lambda _self, _group_ids=None: {
+            "list_registered_groups": lambda _self, _group_ids=None, **_kwargs: {
                 "ok": True,
                 "groups": [{"groupId": "7e3e4567-e89b-42d3-a456-426614174000", "title": "Customer private group"}],
             },
@@ -558,7 +583,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"WECHAT_OCR_GROUP_REMOTE_SYNC": "true"}), \
              mock.patch.object(cloud, "build_registry_client", return_value=fake_client):
             module._REMOTE_GROUP_CACHE.update({"fetched_at": 0.0, "configs": [], "error": ""})
-            self.assertEqual(module.registered_group_configs(force_refresh=True), [])
+            self.assertEqual(module.registered_group_configs(force_refresh=True, visible_titles=[]), [])
 
     def test_only_ocr_group_replies_select_visual_gui_delivery(self):
         module = load_module()
@@ -798,6 +823,40 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         self.assertEqual(result["extraction_method"], "no_unread_badge")
         open_target.assert_not_called()
         extract.assert_not_called()
+
+    def test_pending_discovery_reads_only_generated_titles_with_their_own_badge(self):
+        module = load_module()
+        from PIL import Image, ImageDraw
+        image = Image.new("RGB", (300, 420), "white")
+        draw = ImageDraw.Draw(image)
+        # Unrelated/quiet rows do not inherit this row's unread marker.
+        draw.ellipse((25, 94, 34, 103), fill=(230, 30, 45))
+        tsv = "level\tpage_num\tblock_num\tpar_num\tline_num\tleft\ttop\twidth\theight\tconf\ttext\n"
+        for index, (title, top) in enumerate([
+            ("OverTree-2AAC-论文讨论", 90),
+            ("OverTree-ABCD", 160),
+            ("OtherChat", 230),
+            ("OverTree-ABCDX", 300),
+        ], 1):
+            tsv += f"5\t1\t{index}\t1\t1\t65\t{top}\t160\t20\t95\t{title}\n"
+        self.assertEqual(module.unread_registered_titles_from_snapshot(tsv, image), ["OverTree-2AAC"])
+        draw.ellipse((25, 304, 34, 313), fill=(230, 30, 45))
+        self.assertEqual(module.unread_registered_titles_from_snapshot(tsv, image), ["OverTree-2AAC"])
+        # Support the previous group format, including OCR whitespace splits.
+        tsv += "5\t1\t5\t1\t1\t65\t370\t160\t20\t95\tOverTree - G - 7K4Q2M\n"
+        draw.ellipse((25, 374, 34, 383), fill=(230, 30, 45))
+        self.assertEqual(module.unread_registered_titles_from_snapshot(tsv, image), ["OverTree-2AAC", "OverTree-G-7K4Q2M"])
+
+    def test_visible_discovery_never_navigates_or_searches(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(module, "GUI_LOCK", Path(tmp) / "lock"), \
+             mock.patch.object(module.gui, "wait_for_main_wechat_window", return_value=types.SimpleNamespace(width=916, height=700)), \
+             mock.patch.object(module, "unread_chat_list_snapshot", return_value=("tsv", "image")), \
+             mock.patch.object(module, "unread_registered_titles_from_snapshot", return_value=["OverTree-2AAC"]), \
+             mock.patch.object(module.gui, "open_target") as navigate:
+            self.assertEqual(module.visible_unread_group_titles(":97"), ["OverTree-2AAC"])
+        navigate.assert_not_called()
 
     def test_red_badge_detection_requires_a_compact_connected_marker(self):
         module = load_module()

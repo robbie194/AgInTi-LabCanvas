@@ -133,9 +133,10 @@ class PersonalGroupCloudClient:
         query = urlencode({"agentAccountId": self.agent_account_id, "groupId": group_id})
         return self.request("GET", f"/internal/wechat/personal-groups/v1/bindings/resolve?{query}")
 
-    def list_registered_groups(self, group_ids: list[str] | None = None) -> dict[str, Any]:
+    def list_registered_groups(self, group_ids: list[str] | None = None, *, pending_titles: list[str] | None = None) -> dict[str, Any]:
         params: list[tuple[str, str]] = [("agentAccountId", self.agent_account_id)]
         params.extend(("groupId", str(group_id)) for group_id in (group_ids or [])[:100])
+        params.extend(("pendingTitle", str(title)) for title in (pending_titles or [])[:100])
         query = urlencode(params)
         return self.request("GET", f"/internal/wechat/personal-groups/v1/groups?{query}")
 

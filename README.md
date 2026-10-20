@@ -66,20 +66,21 @@ and ordinary human group chat stays in WeChat. Cloud records who spoke by their
 WeChat display name without assigning different customer/support permissions.
 In the current production pilot, send the one-time code into its preconfigured
 group to bind it; sending a fresh code in that same group switches only that
-group's project and session. New bindings disconnect after 24 hours without a
-Cloud conversation by default, with 3-day, 7-day, and never-expire choices in
-Cloud.
+group's project and session. New bindings remain connected until explicitly
+disconnected in Cloud.
 
 The isolated `OvertreeAI 测试` OCR pilot is active and bound to its selected
 Cloud project/session. Its binding confirmation was verified in the group on
 2026-10-12 after fixing OCR-only text delivery. Other group configs stay
 disabled by default. The Cloud group-registration UI/API and compact group-name
 matching are deployed to the live Cloud service. The Agent workstation syncs
-only groups with an active binding, plus a pending first-binding group whose
-exact ID is already in the local group config list. The OCR monitor is idle
-unless that exact visible chat-list row has a red unread marker; it never uses
-WeChat's global search for inbound messages. Unconfigured pending groups,
-expired codes, and revoked bindings are ignored. The preconfigured pilot
+groups with an active binding. For first binding, it sends only generated
+prefixes seen in currently visible unread chat-list rows to the signed Cloud
+registry (or exact IDs already configured locally). Cloud returns a pending
+group only if its own unused connection code is still valid. No per-customer
+local config is required. The OCR monitor rechecks that exact row's unread
+marker and the opened title before reading; inbound global search stays off.
+Unobserved pending groups, expired codes, and revoked bindings are ignored. The preconfigured pilot
 remains active through the same Cloud registration and binding checks.
 
 The customer signs in at `/wechat` and asks Cloud to generate a unique compact
@@ -88,9 +89,9 @@ WeChat group, adds the Agent account and the intended members, then gives the
 group that name, optionally followed by a readable suffix such as
 `OverTree-ABCD-论文讨论`. The customer returns to `/wechat`, chooses that
 registered group plus a project and session, and generates a one-time code.
-Before the first code can be consumed, an operator must add that exact group
-ID and title to the local Agent-WeChat allowlist. The customer then sends the
-code only in the named group. The local LabCanvas adapter checks the registered
+The customer sends the code only in the named group. When its unread row is
+visible on the Agent workstation, the monitor resolves its registered prefix
+to the Cloud UUID and creates isolated private state automatically. The local LabCanvas adapter checks the registered
 group-name prefix and exact Cloud group identity before claiming the code;
 Cloud binds that group to the selected project and session. Unconfigured
 pending groups are never searched. Cloud does not create the WeChat group or

@@ -135,6 +135,8 @@ def scan_once(args: argparse.Namespace, configs: list[Path]) -> list[dict[str, A
             registered = None
         if registered is None:
             return results
+        if _REMOTE_GROUP_CACHE.get("discovery_error"):
+            results.append({"ok": False, "registry": "visible_group_discovery", "error": _REMOTE_GROUP_CACHE["discovery_error"]})
         # Cloud returns registrations oldest first.  Scan the newest groups
         # first so a newly generated connection code is handled promptly even
         # when older groups are temporarily slow to open in the GUI. Cloud is
@@ -329,6 +331,7 @@ def registered_group_configs(
     *,
     force_refresh: bool = False,
     local_configs: dict[str, tuple[dict[str, Any], Path]] | None = None,
+    visible_titles: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch signed, Cloud-registered group titles and map them to stable IDs."""
     if not remote_group_sync_enabled():
@@ -348,7 +351,22 @@ def registered_group_configs(
     try:
         from wechat_personal_group_cloud import build_registry_client
 
-        response = build_registry_client().list_registered_groups(sorted(local_configs))
+        # Discover only generated titles in currently visible unread rows.
+        # No local UUID exists yet for a new group: Cloud must resolve its
+        # registered prefix before we can create its isolated configuration.
+        discovery_error = ""
+        try:
+            pending_titles = visible_titles if visible_titles is not None else visible_unread_group_titles(
+                os.environ.get("WECHAT_DISPLAY", ":97")
+            )
+        except Exception as exc:
+            # Discovery failure must not interrupt already-bound task/outbox
+            # reconciliation. Admit no newly observed group on this refresh.
+            pending_titles = []
+            discovery_error = f"{type(exc).__name__}: {str(exc)[:300]}"
+        response = build_registry_client().list_registered_groups(
+            sorted(local_configs), pending_titles=pending_titles,
+        )
         raw_groups = response.get("groups")
         if response.get("ok") is not True or not isinstance(raw_groups, list):
             raise PersonalGroupCloudError("OverTree Cloud returned an invalid registered-group list.")
@@ -364,10 +382,9 @@ def registered_group_configs(
             title = str(group.get("title") or "").strip()
             binding_status = str(group.get("bindingStatus") or "unbound").strip().lower()
             local = local_configs.get(group_id)
-            if binding_status == "pending" and not local:
-                # A first-time code is read only from an exact group the
-                # operator has already placed in the local allowlist. Never
-                # enumerate every pending Cloud group or search WeChat for it.
+            if binding_status == "pending" and not local and title not in pending_titles:
+                # A pending group needs either an operator's exact local entry
+                # or its own visible unread row, plus Cloud's live code check.
                 continue
             local_title = str(local[0].get("chat_name") or "").strip() if local else ""
             if not title and binding_status == "bound":
@@ -377,8 +394,8 @@ def registered_group_configs(
                 title = local_title
             if not group_id_is_supported(group_id):
                 continue
-            # Cloud includes bound groups and only locally requested groups
-            # with an unexpired first-binding code. Dormant registrations and
+            # Cloud includes bound groups and explicitly requested pending
+            # groups with a live first-binding code. Dormant registrations and
             # revoked/unpaired groups never enter the local scan list.
             if binding_status not in {"bound", "pending"}:
                 continue
@@ -423,6 +440,7 @@ def registered_group_configs(
             "configs": configs,
             "error": "",
             "local_group_key": local_group_key,
+            "discovery_error": discovery_error,
         })
         return list(configs)
     except Exception as exc:
@@ -915,34 +933,81 @@ def chat_region(window: gui.Window, config: dict[str, Any]) -> dict[str, int]:
     return {"left": window.x + left, "top": window.y + top, "width": max(100, window.width - left - right), "height": max(100, window.height - top - bottom)}
 
 
-def has_unread_badge(env: dict[str, str], window: gui.Window, target: gui.TargetSpec, evidence: Path) -> bool:
-    """Require a red marker in the exact configured chat-list row."""
+def visible_unread_group_titles(display: str) -> list[str]:
+    """Read generated prefixes in visible unread rows, without UI navigation."""
+    env = os.environ.copy()
+    env["DISPLAY"] = str(display)
+    env["WECHAT_DISPLAY"] = str(display)
+    window = gui.wait_for_main_wechat_window(env, timeout=1)
+    if not window or window.width < 760 or window.height < 500:
+        return []
+    with GUI_LOCK.open("a", encoding="utf-8") as lock:
+        acquire_lock(lock, 15)
+        with tempfile.TemporaryDirectory(prefix="wechat-discovery-") as temporary:
+            snapshot = unread_chat_list_snapshot(env, window, Path(temporary))
+            if snapshot is None:
+                return []
+            return unread_registered_titles_from_snapshot(*snapshot)
+
+
+def unread_registered_titles_from_snapshot(tsv: str, image: Any) -> list[str]:
+    # OCR may split the prefix into several words. Never repair ambiguous
+    # letters/digits or accept a partial four-character code from a longer ID.
+    pattern = re.compile(
+        r"(?:OverTree-G-[A-HJ-NP-Z2-9]{6}|OverTree-[A-HJ-NP-Z2-9]{4})(?=$|[^A-Za-z0-9])",
+        re.IGNORECASE,
+    )
+    candidates: set[str] = set()
+    for line in parse_ocr_lines(tsv):
+        compact = "".join(str(line["text"]).split())
+        for match in pattern.finditer(compact):
+            value = match.group(0)
+            title = "OverTree-" + value[len("OverTree-"):].upper()
+            target = target_from_config({"send_target": {
+                "expected_title_aliases": [f"{title}-"],
+            }}, title)
+            if unread_badge_for_target(tsv, image, target):
+                candidates.add(title)
+    return sorted(candidates)[:100]
+
+
+def unread_chat_list_snapshot(
+    env: dict[str, str], window: gui.Window, evidence: Path,
+) -> tuple[str, Any] | None:
     region = gui.chat_list_crop_region(window)
     if not region:
-        return False
+        return None
+    from PIL import Image
     source = evidence / "badge-screen.png"
     crop = evidence / "badge-list.png"
     gui.screenshot(env, source)
     run_command(["convert", str(source), "-crop", f"{region['width']}x{region['height']}+{region['left']}+{region['top']}", str(crop)], env)
+    tsv = run_command(
+        ["tesseract", str(crop), "stdout", "-l", "chi_sim+chi_tra+eng", "--psm", "11", "tsv"],
+        env, check=False,
+    ).stdout
+    with Image.open(crop) as source_image:
+        image = source_image.convert("RGB")
+    return tsv, image
+
+
+def unread_badge_for_target(tsv: str, image: Any, target: gui.TargetSpec) -> bool:
+    match = gui.visible_chat_list_match_from_tsv(tsv, target)
+    if not match:
+        return False
+    row_y = int(float(match["center_y"]))
+    y0, y1 = max(0, row_y - 22), min(image.height, row_y + 22)
+    return y1 > y0 and red_badge_component_present(
+        image.crop((0, y0, image.width, y1)),
+        min_pixels=max(8, int(os.environ.get("WECHAT_OCR_MIN_RED_PIXELS", "12"))),
+    )
+
+
+def has_unread_badge(env: dict[str, str], window: gui.Window, target: gui.TargetSpec, evidence: Path) -> bool:
+    """Require a fresh red marker in the exact configured chat-list row."""
     try:
-        from PIL import Image
-        tsv = run_command(
-            ["tesseract", str(crop), "stdout", "-l", "chi_sim+chi_tra+eng", "--psm", "11", "tsv"],
-            env,
-            check=False,
-        ).stdout
-        match = gui.visible_chat_list_match_from_tsv(tsv, target)
-        if not match:
-            return False
-        image = Image.open(crop).convert("RGB")
-        row_y = int(float(match["center_y"]))
-        y0, y1 = max(0, row_y - 22), min(image.height, row_y + 22)
-        if y1 <= y0:
-            return False
-        return red_badge_component_present(
-            image.crop((0, y0, image.width, y1)),
-            min_pixels=max(8, int(os.environ.get("WECHAT_OCR_MIN_RED_PIXELS", "12"))),
-        )
+        snapshot = unread_chat_list_snapshot(env, window, evidence)
+        return snapshot is not None and unread_badge_for_target(*snapshot, target)
     except Exception:
         return False
 

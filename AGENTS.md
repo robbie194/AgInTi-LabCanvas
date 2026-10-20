@@ -191,7 +191,11 @@ in both `README.md` and `agentic_tools/wechat_gui_agent/docs/ROBUST_EFFICIENT_OP
 
 The explicitly enabled OverTree OCR pilot is a separate visible-GUI ingress:
 it uses synthetic rows and must not require native database IDs or receipts.
-Accept binding codes only as standalone lines. OCR text sends require an exact
+First-binding discovery may request only exact local group IDs or generated
+prefixes in currently visible unread rows; Cloud must validate the registered
+UUID and unused live code before admission. Never enumerate dormant groups or
+use global search for inbound discovery. Accept binding codes only as standalone
+lines. OCR text sends require an exact
 title guard and composer-clear verification; uncertain deliveries must stay
 persistently held for review, including after restart. Keep other transports'
 native receipt checks and per-group state isolation unchanged.

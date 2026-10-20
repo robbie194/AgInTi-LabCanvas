@@ -223,12 +223,14 @@ class PersonalGroupCloudTests(unittest.TestCase):
             agent_account_id="agent-1",
             opener=opener,
         )
-        result = client.list_registered_groups()
+        result = client.list_registered_groups(["local-id"], pending_titles=["OverTree-2AAC"])
         request = captured["request"]
         parsed = urlsplit(request.full_url)
         self.assertEqual(request.method, "GET")
         self.assertEqual(parsed.path, "/internal/wechat/personal-groups/v1/groups")
         self.assertEqual(parse_qs(parsed.query)["agentAccountId"], ["agent-1"])
+        self.assertEqual(parse_qs(parsed.query)["groupId"], ["local-id"])
+        self.assertEqual(parse_qs(parsed.query)["pendingTitle"], ["OverTree-2AAC"])
         self.assertEqual(result["groups"][0]["title"], "OverTree-G-7K4Q2M")
         timestamp = request.get_header("X-overtree-wechat-timestamp")
         nonce = request.get_header("X-overtree-wechat-nonce")

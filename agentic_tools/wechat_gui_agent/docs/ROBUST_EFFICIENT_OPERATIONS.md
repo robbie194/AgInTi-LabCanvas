@@ -165,9 +165,16 @@ the selected conversation; a failed title check stops that scan.
 Legacy pilot bindings without a group-slot row are checked by Cloud against
 only the exact UUIDs or stable `ocr-title-<24 hex>` IDs from existing local
 configs and their stored peer hashes. Pending first-binding groups are returned
-only when their exact ID is already in the local allowlist;
-they cannot cause enumeration of other WeChat groups. Idle-expired bindings
-are excluded.
+only for exact locally configured IDs or generated prefixes observed in visible
+unread chat-list rows. Discovery takes one passive list snapshot per signed
+registry refresh (30 seconds by default), checks each candidate's own red badge,
+and sends only those prefixes as signed `pendingTitle` values. Cloud validates
+the active registration, owning project/session, Agent account, and unused live
+code before returning the exact group UUID. The monitor independently checks
+that returned pending titles were requested, then rechecks the live row badge
+and opened title before reading. No new local config, global search, dormant
+registration enumeration, code-expiry bypass, or cross-group state reuse is
+allowed. Idle-expired bindings are excluded.
 Read Tesseract TSV as unquoted fields: OCR may return a literal unmatched
 double quote in a chat preview, which must not hide later registered group-title
 rows from the selector. After the title-prefix guard succeeds, OCR locates

@@ -182,10 +182,12 @@ sudo -u overtree-wechat env HOME=/home/overtree-wechat \
 For Cloud-registered groups, set `WECHAT_OCR_GROUP_REMOTE_SYNC=true` in the
 private local environment and reload monitors after deploying the matching
 Cloud version. Cloud returns all currently bound groups, plus a pending
-first-binding group only when its exact group ID is already present in the
-local group config list and it has an unexpired code. This lets an operator
-explicitly prepare one new group without scanning every pending group in the
-account. Groups with no binding/code, expired pending registrations, and
+first-binding group only when its exact ID is configured locally or its
+generated prefix was observed in a visible unread chat-list row, and it has an
+unused, unexpired code for the same Agent account and owning project/session.
+The monitor sends only observed prefixes as signed `pendingTitle` parameters;
+it does not fetch every pending registration or search for groups. This avoids
+requiring a per-customer local config before the first binding. Groups with no binding/code, expired pending registrations, and
 revoked groups are omitted. Every
 `WECHAT_OCR_GROUP_INTERVAL` (3 seconds by default), it takes a local screenshot
 of the Agent-WeChat desktop, reduces the conversation-list/chat-tail crop to a
