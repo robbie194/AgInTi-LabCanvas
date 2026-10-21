@@ -48,11 +48,29 @@ agentic_tools/virtual_desktop/launch_virtual_desktop.sh \
 Open:
 
 ```text
-http://127.0.0.1:6107/vnc_lite.html?host=127.0.0.1&port=6107&autoconnect=1&resize=remote
+http://127.0.0.1:6107/vnc.html?host=127.0.0.1&port=6107&autoconnect=1&resize=scale
 ```
+
+For normal operation use `wechat_virtual_desktop.sh ensure` and open
+`http://127.0.0.1:6108/`. Its **复制与粘贴** panel preserves UTF-8 text:
+
+- Local → remote: paste into the panel, click **传入远端**, then Ctrl+V in WeChat.
+- Remote → local: copy in WeChat, click **复制到本机**. If the browser denies
+  clipboard permission, the panel selects the text for Ctrl+C instead.
+
+The preview bridge binds only to loopback. Clipboard access requires an
+in-page capability token, an exact same-origin request and a loopback Host;
+GET requests never return clipboard contents. It accepts at most 1 MiB of
+UTF-8 text and does not send chat messages. `WECHAT_PREVIEW_PORT` defaults to
+`WECHAT_NOVNC_PORT + 1`. The direct full noVNC link above remains a fallback,
+but its legacy clipboard can corrupt non-Latin text. Browser Ctrl+V over the
+canvas alone does not synchronize clipboards. Monitor/native Copy operations
+share the remote clipboard; coordinate manual maintenance with the GUI lock.
 
 The Linux WeChat client is single-instance. If it is already running on another
 desktop, close that instance before launching it on the virtual display.
+The WeChat wrapper disables XDamage-based frame skipping to avoid stale Qt
+window previews on Xvfb; other virtual desktops retain their existing default.
 The wrapper keeps the isolated X11 desktop awake with `xset`, so noVNC should
 not blank during long-running monitoring. Apply or refresh this without
 restarting WeChat:

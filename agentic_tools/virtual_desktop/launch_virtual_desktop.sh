@@ -13,6 +13,7 @@ OPEN_BROWSER="0"
 APP_MATCH=""
 APP_COMMAND=()
 RECOVER_STALE_DISPLAY="0"
+DISABLE_XDAMAGE="0"
 PROBE_TIMEOUT_SECONDS="${VIRTUAL_DESKTOP_PROBE_TIMEOUT_SECONDS:-3}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 USER_NAME="${USER:-$(id -un)}"
@@ -33,6 +34,7 @@ Options:
   --recover-stale-display
                        Restart only the selected Xvfb/x11vnc pair when its
                        display exists but does not answer bounded X11 probes.
+  --no-xdamage        Poll pixels instead of relying on XDamage notifications.
   --no-keep-awake      Do not disable X11 blanking/DPMS.
   --keep-awake-interval SECONDS
                        Refresh X11 keep-awake state on this interval. Default: 55
@@ -54,6 +56,7 @@ while [[ $# -gt 0 ]]; do
     --log-dir) LOG_DIR="$2"; shift 2 ;;
     --app-match) APP_MATCH="$2"; shift 2 ;;
     --recover-stale-display) RECOVER_STALE_DISPLAY="1"; shift ;;
+    --no-xdamage) DISABLE_XDAMAGE="1"; shift ;;
     --no-keep-awake) KEEP_AWAKE="0"; shift ;;
     --keep-awake-interval) KEEP_AWAKE_INTERVAL="$2"; shift 2 ;;
     --open-browser) OPEN_BROWSER="1"; shift ;;
@@ -167,8 +170,16 @@ fi
 
 if ! ss -ltn | awk '{print $4}' | grep -Eq "(^|:)${VNC_PORT}$"; then
   echo "Starting x11vnc on 127.0.0.1:$VNC_PORT for $DISPLAY_ID"
-  env -u WAYLAND_DISPLAY x11vnc -display "$DISPLAY_ID" -localhost -nopw -forever -shared -rfbport "$VNC_PORT" \
+  vnc_extra_args=()
+  [[ "$DISABLE_XDAMAGE" == "1" ]] && vnc_extra_args+=(-noxdamage)
+  env -u WAYLAND_DISPLAY x11vnc "${vnc_extra_args[@]}" -display "$DISPLAY_ID" -localhost -nopw -forever -shared -rfbport "$VNC_PORT" \
     -bg -o "$LOG_DIR/${NAME}_x11vnc.log" >/dev/null
+fi
+
+# Apply the selected polling mode to a reused relay as well as a new one.
+if [[ "$DISABLE_XDAMAGE" == "1" ]]; then
+  timeout "${PROBE_TIMEOUT_SECONDS}s" env DISPLAY="$DISPLAY_ID" XAUTHORITY= \
+    x11vnc -display "$DISPLAY_ID" -R noxdamage -sync >/dev/null 2>&1 || true
 fi
 
 if ! ss -ltn | awk '{print $4}' | grep -Eq "(^|:)${NOVNC_PORT}$"; then

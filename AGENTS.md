@@ -220,3 +220,8 @@ Do not commit `labcanvas.targets.json`, `.aginti/.env`, or generated `output/` f
 ## Agent-Specific Instructions
 
 Before editing, inspect `git status` and preserve unrelated local changes. Prefer repository commands from this file over generic assumptions, and update `README.md` plus this guide whenever CLI behavior or target configuration changes.
+
+For the isolated Linux WeChat preview, use the loopback UTF-8 clipboard wrapper
+at port 6108 (`wechat_preview.py`), not the legacy VNC Clipboard panel for
+Chinese text. Keep its exact Host/Origin/token checks and 1 MiB limit. Preserve
+the running client during preview maintenance; `--no-xdamage` is WeChat-only.

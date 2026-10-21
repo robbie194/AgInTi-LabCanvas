@@ -2629,3 +2629,29 @@ Then:
 - `CHATOPS_ARCHITECTURE.md`: routing, monitor, worker, memory, and media design.
 - `MIRROR_SCHEMA.md`: local evidence database schema.
 - this file: invariants, efficiency rules, states, and recovery.
+
+
+### noVNC operator clipboard and frame refresh (2026-10-21)
+
+WeChat-only desktop startup opts into `--no-xdamage` for Xvfb/Qt frame polling,
+including an already-running relay; other desktops keep their defaults. A
+rename system notice and a stale browser frame are not verified current chat
+identity. Compare the native desktop and refresh the browser when diagnosing.
+Keep admission fail-closed if the actual native title is still unnamed.
+
+Desktop/status/browser-assist links use the loopback preview at port 6108,
+with a full noVNC iframe on 6107. The launcher serializes startup with its
+existing client lifecycle lock, verifies preview health/configuration, and
+never replaces an unrelated listener. The native WeChat client is preserved.
+
+Use **复制与粘贴** → **传入远端**, then Ctrl+V in the native input. For the
+opposite direction, native Copy → **复制到本机**; denied browser clipboard
+permission selects text for manual Ctrl+C. UTF-8 goes directly through xclip,
+bypassing the legacy VNC clipboard encoding. The write endpoint confirms the
+selection reads back exactly before reporting success. The bridge is loopback
+only, enforces exact Host/Origin and a process capability token, limits text
+to 1 MiB, and never logs text or returns it from GET. Native monitor Copy
+still shares the remote clipboard; coordinate maintenance under its GUI lock.
+The direct full noVNC fallback remains available, but its Clipboard panel is
+not reliable for Chinese. Do not send a test message or bind a group solely
+to test clipboard transport.

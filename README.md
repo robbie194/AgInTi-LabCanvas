@@ -129,6 +129,11 @@ full text. OCR stays as a bounded fallback; Cloud task/result polling continues
 while the GUI is idle.
 The guide includes a loopback-only SSH tunnel and `wechat_agent_profile.sh
 add-group`, which creates one private state/config per exact group.
+The WeChat preview (`http://127.0.0.1:6108/`) includes an explicit UTF-8
+clipboard panel for Chinese text in both directions. Its desktop wrapper
+polls Qt/Xvfb frames without XDamage to avoid stale group names, preserving
+the existing client login and exact-title routing checks. See the
+[clipboard instructions](agentic_tools/wechat_gui_agent/README.md).
 If noVNC opens to a black screen, use the
 [virtual desktop startup troubleshooting guide](agentic_tools/wechat_gui_agent/docs/ROBUST_EFFICIENT_OPERATIONS.md#virtual-desktop-startup-troubleshooting).
 When Tencent requires a newer Linux WeChat, the Agent can use a private client

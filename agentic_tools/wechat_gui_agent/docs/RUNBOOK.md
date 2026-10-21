@@ -311,3 +311,13 @@ visually confirmed. Creating a group is a real WeChat action and notifies users.
   `labcanvas wechat reject`; without a task id the newest waiting task is used.
 - If the external decrypt backend reports missing keys, rerun key extraction only
   under explicit local authorization, then run `backend decrypt --incremental`.
+
+## Local desktop preview and Chinese clipboard
+
+Run `wechat_virtual_desktop.sh ensure` under the isolated WeChat account; open
+`http://127.0.0.1:6108/`. Use **复制与粘贴** → **传入远端**, then Ctrl+V
+in WeChat. To copy out, copy natively and click **复制到本机** (or Ctrl+C
+on the selected panel text if browser permission is denied). Legacy direct
+noVNC remains at 6107 but its clipboard can corrupt Chinese. Startup applies
+WeChat-only pixel polling without restarting the logged-in client. This does
+not relax current native-title checks or authorize a test chat message.

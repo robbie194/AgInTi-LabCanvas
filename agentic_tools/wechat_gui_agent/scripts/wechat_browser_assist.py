@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parents[3]
 PRIVATE = ROOT / "agentic_tools" / "wechat_gui_agent" / ".private"
 DEFAULT_DISPLAY = ":97"
-DEFAULT_NOVNC_PORT = 6107
+DEFAULT_PREVIEW_PORT = 6108
 VERIFICATION_TEXT_MARKERS = (
     "环境异常",
     "完成验证后继续访问",
@@ -429,7 +429,7 @@ def safe_file_token(value: str) -> str:
 
 
 def novnc_url() -> str:
-    return f"http://127.0.0.1:{DEFAULT_NOVNC_PORT}/vnc_lite.html?host=127.0.0.1&port={DEFAULT_NOVNC_PORT}&autoconnect=1&resize=remote"
+    return f"http://127.0.0.1:{DEFAULT_PREVIEW_PORT}/"
 
 
 def redacted_path(path: Path) -> str:

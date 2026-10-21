@@ -6,6 +6,7 @@ ACTION="${1:-ensure}"
 DISPLAY_ID="${WECHAT_DISPLAY:-:97}"
 VNC_PORT="${WECHAT_VNC_PORT:-5917}"
 NOVNC_PORT="${WECHAT_NOVNC_PORT:-6107}"
+PREVIEW_PORT="${WECHAT_PREVIEW_PORT:-$((NOVNC_PORT + 1))}"
 LOG_DIR="${WECHAT_AGENT_LOG_DIR:-$ROOT/output/virtual_desktop/$(date +%F)}"
 PRIVATE_DIR="${WECHAT_AGENT_PRIVATE_DIR:-$ROOT/agentic_tools/wechat_gui_agent/.private}"
 WECHAT_HOME="${WECHAT_AGENT_HOME:-$HOME}"
@@ -147,6 +148,7 @@ fi
   --vnc-port "$VNC_PORT" \
   --novnc-port "$NOVNC_PORT" \
   --recover-stale-display \
+  --no-xdamage \
   --keep-awake-interval "$KEEP_AWAKE_INTERVAL" \
   --log-dir "$LOG_DIR" \
   -- /bin/true 9>&- >"$LAUNCH_LOG"
@@ -197,7 +199,39 @@ fi
 
 echo "Selected WeChat client: $WECHAT_BINARY" >>"$APP_LOG"
 
+# Reuse only our exact preview service. Never replace an unrelated listener.
+preview_health() {
+  python3 - "$PREVIEW_PORT" "$NOVNC_PORT" "$DISPLAY_ID" <<'PYCODE'
+import json, sys, urllib.request
+try:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open('http://127.0.0.1:' + sys.argv[1] + '/health', timeout=2) as response:
+        value = json.load(response)
+    good = (value.get('service') == 'wechat-preview' and value.get('ok') is True
+            and value.get('novnc_port') == int(sys.argv[2]) and value.get('display') == sys.argv[3])
+except Exception:
+    good = False
+sys.exit(0 if good else 1)
+PYCODE
+}
+if ! preview_health; then
+  env DISPLAY="$DISPLAY_ID" XAUTHORITY= setsid -f python3 \
+    "$ROOT/agentic_tools/wechat_gui_agent/scripts/wechat_preview.py" \
+    --port "$PREVIEW_PORT" --novnc-port "$NOVNC_PORT" --display "$DISPLAY_ID" \
+    9>&- </dev/null >>"$LOG_DIR/wechat_preview.log" 2>&1
+  for _attempt in {1..10}; do
+    preview_health && break
+    sleep 0.2
+  done
+fi
+if ! preview_health; then
+  echo "WeChat clipboard preview could not start; see $LOG_DIR/wechat_preview.log" >&2
+  exit 1
+fi
+
 cat "$LAUNCH_LOG"
 echo
-echo "WeChat noVNC:"
-echo "  http://127.0.0.1:${NOVNC_PORT}/vnc_lite.html?host=127.0.0.1&port=${NOVNC_PORT}&autoconnect=1&resize=remote"
+echo "WeChat preview (UTF-8 clipboard):"
+echo "  http://127.0.0.1:${PREVIEW_PORT}/"
+echo "Direct noVNC fallback:"
+echo "  http://127.0.0.1:${NOVNC_PORT}/vnc.html?host=127.0.0.1&port=${NOVNC_PORT}&autoconnect=1&resize=scale"

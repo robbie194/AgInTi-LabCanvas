@@ -69,3 +69,8 @@ the application. Disable it only for debugging:
 ```bash
 agentic_tools/virtual_desktop/launch_virtual_desktop.sh --no-keep-awake -- ...
 ```
+
+`--no-xdamage` opts a desktop into pixel polling for Qt/Xvfb displays that show
+stale frames in VNC. It also applies to an existing relay through a bounded
+local control request. WeChat enables this option; other desktops keep the
+default. This does not restart Xvfb or the application.

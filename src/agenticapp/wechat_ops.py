@@ -27,6 +27,7 @@ DEFAULT_SEND_TARGETS = PRIVATE / "wechat_send_targets.local.json"
 DEFAULT_DISPLAY = ":97"
 DEFAULT_VNC_PORT = 5917
 DEFAULT_NOVNC_PORT = 6107
+DEFAULT_PREVIEW_PORT = 6108
 TRANSPORT_HEALTH_GUARD = SCRIPTS / "wechat_transport_stall_guard.py"
 TRANSPORT_HEALTH_SNAPSHOT = PACKAGE_ROOT / "output" / "transport-health" / "latest.json"
 UNLOCK_WATCHDOG_STATE = PRIVATE / "wechat_desktop_unlock_watchdog.state.json"
@@ -466,7 +467,8 @@ def status_payload() -> dict[str, Any]:
         "codex_sessions": codex_session_summary(),
         "agent_backends": backends,
         "media_sources": [str(path) for path in discover_media_sources()],
-        "novnc_url": f"http://127.0.0.1:{DEFAULT_NOVNC_PORT}/vnc_lite.html?host=127.0.0.1&port={DEFAULT_NOVNC_PORT}&autoconnect=1&resize=remote",
+        "novnc_url": f"http://127.0.0.1:{DEFAULT_PREVIEW_PORT}/",
+        "direct_novnc_url": f"http://127.0.0.1:{DEFAULT_NOVNC_PORT}/vnc.html?autoconnect=1&resize=scale",
     }
 
 
@@ -3799,7 +3801,7 @@ def desktop_status() -> dict[str, Any]:
                 'ports': {'6143': port_listening(6143)}}
     display_ok = run_command(["xdpyinfo"], capture=True, env=display_env(DEFAULT_DISPLAY)).returncode == 0
     wechat_window = run_command(["xdotool", "search", "--onlyvisible", "--class", "wechat"], capture=True, env=display_env(DEFAULT_DISPLAY))
-    ports = {str(port): port_listening(port) for port in (DEFAULT_VNC_PORT, DEFAULT_NOVNC_PORT)}
+    ports = {str(port): port_listening(port) for port in (DEFAULT_VNC_PORT, DEFAULT_NOVNC_PORT, DEFAULT_PREVIEW_PORT)}
     watchdog = fresh_unlock_watchdog_state()
     client = wechat_client_availability(watchdog)
     live_state = str(client.get("status") or "")
@@ -3824,7 +3826,8 @@ def desktop_status() -> dict[str, Any]:
         "ports": ports,
         "client": client,
         "watchdog": watchdog,
-        "novnc_url": f"http://127.0.0.1:{DEFAULT_NOVNC_PORT}/vnc_lite.html?host=127.0.0.1&port={DEFAULT_NOVNC_PORT}&autoconnect=1&resize=remote",
+        "novnc_url": f"http://127.0.0.1:{DEFAULT_PREVIEW_PORT}/",
+        "direct_novnc_url": f"http://127.0.0.1:{DEFAULT_NOVNC_PORT}/vnc.html?autoconnect=1&resize=scale",
     }
 
 
