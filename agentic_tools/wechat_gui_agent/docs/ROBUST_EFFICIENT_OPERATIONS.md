@@ -154,27 +154,34 @@ default) starts an active pass. Empty-screen Cloud polls still reconcile
 already-submitted tasks and the reply outbox without taking over the chat UI.
 Cloud returns only groups with an active binding or an unexpired first-binding
 code; revoked groups, expired pending registrations, and orphaned groups are
-excluded. Every active pass first OCR-matches the exact configured title in
-the visible chat list, then checks red pixels only in that row. Without that
-row's unread badge, it does not open the conversation or type any title into
-WeChat's global search box. Search fallback is disabled for this OCR ingress,
-including bound groups. A pending first-binding group is processed only when
-its own visible row is unread, and its standalone code remains the only message
-accepted before binding. The opened title guard still must pass before OCR reads
-the selected conversation; a failed title check stops that scan.
-Legacy pilot bindings without a group-slot row are checked by Cloud against
-only the exact UUIDs or stable `ocr-title-<24 hex>` IDs from existing local
-configs and their stored peer hashes. Pending first-binding groups are returned
-only for exact locally configured IDs or generated prefixes observed in visible
-unread chat-list rows. Discovery takes one passive list snapshot per signed
-registry refresh (30 seconds by default), checks each candidate's own red badge,
-and sends only those prefixes as signed `pendingTitle` values. Cloud validates
-the active registration, owning project/session, Agent account, and unused live
-code before returning the exact group UUID. The monitor independently checks
-that returned pending titles were requested, then rechecks the live row badge
-and opened title before reading. No new local config, global search, dormant
+excluded. An active pass opens only an exact current or visible group and
+verifies its title. Read status is not an admission requirement: opening the
+group clears unread badges. Badge-only behavior is an explicit opt-in through
+`WECHAT_OCR_GROUP_REQUIRE_BADGE=1`, default 0. Inbound global search remains off.
+First-binding discovery passively reads generated prefixes from visible rows
+and the current group header once per registry refresh (30 seconds by default),
+then sends only those observed prefixes or exact local IDs to the signed Cloud
+registry. Cloud requires the active registration, owner/project/session, Agent
+account, and unused live code before returning the exact UUID. No dormant
 registration enumeration, code-expiry bypass, or cross-group state reuse is
-allowed. Idle-expired bindings are excluded.
+allowed. Legacy bindings still require Cloud confirmation of their exact local
+ID. Idle-expired bindings are excluded.
+Process all visible addressed bubbles in chronological order, using native
+Copy for full message text and standalone codes where possible. Keep the last
+200 normalized content fingerprints across restarts without expiring still-
+visible history after 15 minutes. The OCR transport cannot distinguish two
+separate bubbles with identical normalized content; its existing Cloud content
+ID also deduplicates them. Do not claim native message-ID guarantees.
+On initial startup, seed existing read history; unread activity or a newly
+admitted pending-code group is eligible immediately. Ingress and delivery share
+header crops; the compact 900px-window crop avoids the search icon and sender
+avatar that previously contaminated title identity. A failed inbound title
+check still polls pending Cloud tasks and outbox items; each send independently
+verifies its title. Per-group private state records scan time/method/counts,
+and a monitor heartbeat is logged every 60 seconds even when idle. Heartbeats
+and unit tests alone do not establish end-to-end delivery. See the
+[repair record](../../../references/wechat-ocr-read-state-repair-2026-10-21.md).
+
 Read Tesseract TSV as unquoted fields: OCR may return a literal unmatched
 double quote in a chat preview, which must not hide later registered group-title
 rows from the selector. After the title-prefix guard succeeds, OCR locates

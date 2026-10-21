@@ -26,6 +26,115 @@ def load_module():
 
 
 class WeChatOcrGroupIngressTests(unittest.TestCase):
+    def test_read_current_group_submits_multiple_messages_once_and_keeps_polling(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            module.PRIVATE = Path(tmp)
+            module.GUI_LOCK = Path(tmp) / "gui.lock"
+            config = {
+                "chat_name": "OverTree-ABCD", "chatroom_id": "group",
+                "personal_group_cloud": {"enabled": True},
+            }
+            args = types.SimpleNamespace(display=":97", require_unread_badge=False)
+            window = types.SimpleNamespace(x=0, y=0, width=916, height=700)
+            batch = {"method": "visible_batch", "messages": [
+                {"text": "@OverTree 第一问", "method": "native_copy"},
+                {"text": "@OverTree 第二问", "method": "native_copy"},
+            ]}
+            with mock.patch.object(module.gui, "require_tools"), \
+                 mock.patch.object(module.gui, "wait_for_main_wechat_window", return_value=window), \
+                 mock.patch.object(module, "has_unread_badge", return_value=False), \
+                 mock.patch.object(module.gui, "open_target", return_value={"ok": True}) as open_target, \
+                 mock.patch.object(module, "ocr_triggered_message", return_value=batch), \
+                 mock.patch.object(module, "run_cloud_once", side_effect=lambda _c, s, _r, **_kw: {"state": s, "metrics": {}}) as cloud:
+                first = module.scan_group(args, config, Path(tmp) / "config.json")
+                second = module.scan_group(args, config, Path(tmp) / "config.json")
+            self.assertEqual(first["queued_count"], 2)
+            self.assertEqual(second["queued_count"], 0)
+            self.assertEqual([r["content"] for r in cloud.call_args_list[0].args[2]],
+                             ["@OverTree 第一问", "@OverTree 第二问"])
+            self.assertEqual(cloud.call_args_list[1].args[2], [])
+            self.assertTrue(open_target.call_args.kwargs["prefer_current"])
+            self.assertFalse(open_target.call_args.kwargs["allow_search"])
+            saved = module.load_state(Path(tmp) / "OverTree-ABCD-ocr.state.json")
+            self.assertEqual(saved["ocr_last_scan_method"], "visible_batch")
+            self.assertGreater(saved["ocr_last_scan_at"], 0)
+
+    def test_seen_history_does_not_replay_after_cooldown_or_restart(self):
+        module = load_module()
+        state = {"ocr_seen_fingerprints": ["seen"], "ocr_fingerprint_times": {"seen": 1}}
+        with mock.patch.object(module.time, "time", return_value=999999):
+            self.assertTrue(module.ocr_fingerprint_is_recent(state, "seen", "old message"))
+            self.assertFalse(module.ocr_fingerprint_is_recent(state, "new", "new message"))
+
+    def test_literal_quote_does_not_swallow_later_tesseract_rows(self):
+        module = load_module()
+        header = "level\tpage_num\tblock_num\tpar_num\tline_num\tleft\ttop\twidth\theight\tconf\ttext\n"
+        tsv = header + '5\t1\t1\t1\t1\t10\t10\t20\t20\t95\t"Robbie\n'
+        tsv += '5\t1\t2\t1\t1\t10\t50\t100\t20\t95\t@OverTree 新问题\n'
+        self.assertEqual([r["text"] for r in module.parse_ocr_lines(tsv)],
+                         ['"Robbie', '@OverTree 新问题'])
+
+    def test_misread_code_requires_exact_native_copy_not_character_guessing(self):
+        module = load_module()
+        line = {"text": "2TTV44W", "top": 10, "left": 10, "right": 160, "bottom": 30}
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(module.gui, "screenshot"), \
+             mock.patch.object(module, "run_command", return_value=types.SimpleNamespace(stdout="")), \
+             mock.patch.object(module, "parse_ocr_lines", return_value=[line]), \
+             mock.patch.object(module, "copy_text_bubble", return_value="2TJTV44W") as copy, \
+             mock.patch.object(module, "copy_code_word", return_value=""):
+            config = {"personal_group_cloud": {"trigger_prefixes": ["@OverTree"]}}
+            window = types.SimpleNamespace(x=0, y=0, width=916, height=700)
+            result = module.ocr_triggered_message({}, window, config, Path(tmp), all_messages=True)
+            self.assertEqual(result["messages"], [{"text": "2TJTV44W", "method": "ocr_binding_code"}])
+            copy.return_value = ""
+            result = module.ocr_triggered_message({}, window, config, Path(tmp), all_messages=True)
+            self.assertEqual(result["messages"], [])
+
+    def test_native_word_copy_accepts_only_a_complete_code_and_never_escapes(self):
+        module = load_module()
+        window = types.SimpleNamespace(x=0, y=0, width=916, height=700)
+        with mock.patch.object(module, "start_clipboard_probe"), \
+             mock.patch.object(module, "stop_clipboard_probe"), \
+             mock.patch.object(module.gui, "double_click"), \
+             mock.patch.object(module.gui, "run") as run, \
+             mock.patch.object(module.time, "sleep"), \
+             mock.patch.object(module, "wait_for_clipboard_text", return_value="2TJTV44W") as copied:
+            self.assertEqual(module.copy_code_word({}, window, 500, 400), "2TJTV44W")
+            copied.return_value = "2TTV44W"
+            self.assertEqual(module.copy_code_word({}, window, 500, 400), "")
+            copied.return_value = "@OverTree 完整问题"
+            self.assertEqual(module.copy_code_word({}, window, 500, 400), "")
+        self.assertFalse(any("Escape" in call.args[0] for call in run.call_args_list))
+
+    def test_batch_claims_native_code_before_each_complete_question(self):
+        module = load_module()
+        lines = [{"text": text, "top": top, "left": 10, "right": 200, "bottom": top + 20}
+                 for text, top in [("@OverTree 旧会话", 10), ("ABCD 2345", 50),
+                                   ("@OverTree 第一问", 90), ("@OverTree 第二问", 130)]]
+        config = {"personal_group_cloud": {"trigger_prefixes": ["@OverTree"]}}
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(module.gui, "screenshot"), \
+             mock.patch.object(module, "run_command", return_value=types.SimpleNamespace(stdout="")), \
+             mock.patch.object(module, "parse_ocr_lines", return_value=lines), \
+             mock.patch.object(module, "copy_text_bubble", side_effect=["ABCD2345", "@OverTree 第一问\n完整问题", "@OverTree 第二问"]):
+            result = module.ocr_triggered_message(
+                {}, types.SimpleNamespace(x=0, y=0, width=916, height=700), config, Path(tmp),
+                prefer_binding_code=True, all_messages=True,
+            )
+        self.assertEqual([m["text"] for m in result["messages"]],
+                         ["ABCD2345", "@OverTree 第一问\n完整问题", "@OverTree 第二问"])
+
+    def test_discovery_accepts_read_titles_without_accepting_longer_codes_or_preview_text(self):
+        module = load_module()
+        self.assertEqual(module.registered_titles_from_lines([
+            {"text": "OverTree - 2AAC-论文讨论"}, {"text": "OverTree-ABCD (3)"},
+            {"text": "OverTree - WXYZ 14:32"},
+            {"text": "OverTree-ABCDX"}, {"text": "Robbie: OverTree-WXYZ"},
+            {"text": "OverTree-G-7K4Q2M"}, {"text": "OtherGroup"},
+        ]), {"OverTree-2AAC", "OverTree-ABCD", "OverTree-WXYZ", "OverTree-G-7K4Q2M"})
+
     def test_ocr_debug_dump_is_rejected_as_message_text(self):
         module = load_module()
         debug_dump = """@OverTree 请继续处理
@@ -112,7 +221,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         self.assertEqual(result["method"], "native_copy")
         self.assertEqual(result["text"], "@OverTree 请分析第一部分\n并完整处理第二部分内容")
         module.copy_text_bubble.assert_called_once_with(
-            {"DISPLAY": ":97"}, window, 235, 100, evidence=Path(tmp)
+            {"DISPLAY": ":97"}, window, 265, 111, evidence=Path(tmp)
         )
 
     def test_ocr_trigger_rejects_native_copy_tesseract_dump(self):
@@ -185,8 +294,9 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
 
         self.assertEqual(result, "@OverTree 完整问题")
         self.assertTrue(start_probe.called)
-        self.assertEqual(run.call_args_list[0].args[0], ["xdotool", "mousemove", "480", "300", "click", "3"])
-        self.assertEqual(run.call_args_list[1].args[0], ["xdotool", "getdisplaygeometry"])
+        self.assertEqual(run.call_args_list[0].args[0], ["xdotool", "mousemove", "480", "300"])
+        self.assertEqual(run.call_args_list[1].args[0], ["xdotool", "click", "3"])
+        self.assertEqual(run.call_args_list[2].args[0], ["xdotool", "getdisplaygeometry"])
         self.assertEqual(click.call_args.args[1:], (520, 340))
         self.assertEqual(screenshot.call_count, 1)
         stop_probe.assert_called_once_with(owner)
@@ -291,8 +401,8 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         module = load_module()
         window = type("Window", (), {"x": 502, "y": 206, "width": 916, "height": 666})()
         regions = module.ocr_title_crop_regions(window)
-        self.assertEqual(regions[0]["left"], 813)
-        self.assertEqual(regions[0]["width"], 384)
+        self.assertEqual(regions[0]["left"], 941)
+        self.assertEqual(regions[0]["width"], 300)
         self.assertEqual(regions[0]["top"], 238)
 
     def test_unaddressed_text_is_ignored(self):
@@ -439,7 +549,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         ]}
         cloud = sys.modules["wechat_personal_group_cloud"]
         with mock.patch.dict(os.environ, {"WECHAT_OCR_GROUP_REMOTE_SYNC": "true"}), \
-             mock.patch.object(module, "visible_unread_group_titles", side_effect=RuntimeError("capture failed")), \
+             mock.patch.object(module, "visible_registered_group_titles", side_effect=RuntimeError("capture failed")), \
              mock.patch.object(cloud, "build_registry_client", return_value=client):
             configs = module.registered_group_configs(force_refresh=True)
         self.assertEqual(configs[0]["chatroom_id"], group_id)
@@ -720,7 +830,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
 
             with mock.patch.object(module.gui, "require_tools"), \
                  mock.patch.object(module.gui, "wait_for_main_wechat_window", return_value=window), \
-                 mock.patch.object(module, "has_unread_badge", return_value=True), \
+                 mock.patch.object(module, "has_unread_badge", return_value=False), \
                  mock.patch.object(module.gui, "open_target", return_value={"ok": True}), \
                  mock.patch.object(module, "ocr_triggered_message", return_value={
                      "text": "@OverTree 第一行\n第二行", "method": "native_copy",
@@ -779,7 +889,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
                  mock.patch.object(module, "has_unread_badge", return_value=True), \
                  mock.patch.object(module.gui, "open_target", side_effect=reject_opened_target) as open_target, \
                  mock.patch.object(module, "ocr_triggered_message") as extract_message, \
-                 mock.patch.object(module, "run_cloud_once") as poll_cloud:
+                 mock.patch.object(module, "run_cloud_once", return_value={"state": {}, "metrics": {}}) as poll_cloud:
                 result = module.scan_group(args, config, private / "group.json", scan_gui=True)
                 search_setting_restored = os.environ.get("WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH")
 
@@ -790,10 +900,10 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         self.assertFalse(open_target.call_args.kwargs["skip_title_guard"])
         self.assertTrue(open_target.call_args.kwargs["fail_closed_after_visible_match"])
         extract_message.assert_not_called()
-        poll_cloud.assert_not_called()
+        poll_cloud.assert_called_once()
         self.assertIsNone(search_setting_restored)
 
-    def test_group_without_its_own_unread_badge_never_opens_or_searches(self):
+    def test_opt_in_badge_only_mode_skips_read_group(self):
         module = load_module()
         with tempfile.TemporaryDirectory() as tmp:
             private = Path(tmp) / "private"
@@ -810,7 +920,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
                 "send_target": {"name": "OverTree-G-ABCD", "expected_title": "OverTree-G-ABCD", "allow_search": True},
                 "personal_group_cloud": {"enabled": True},
             }
-            args = type("Args", (), {"display": ":97", "require_unread_badge": False})()
+            args = type("Args", (), {"display": ":97", "require_unread_badge": True})()
             window = type("Window", (), {"x": 0, "y": 0, "width": 916, "height": 700})()
             with mock.patch.object(module.gui, "require_tools"), \
                  mock.patch.object(module.gui, "wait_for_main_wechat_window", return_value=window), \

@@ -32,6 +32,7 @@ from wechat_personal_group_cloud import (
 )
 
 
+GUI_TITLE_CROP_REGIONS = gui.title_crop_regions
 ROOT = Path(__file__).resolve().parents[3]
 PRIVATE = Path(os.environ.get(
     "WECHAT_AGENT_PRIVATE_DIR",
@@ -78,8 +79,8 @@ def main() -> int:
     parser.add_argument(
         "--require-unread-badge",
         action="store_true",
-        default=True,
-        help="Only open an exact configured group row when its own unread badge is visible (always on).",
+        default=False,
+        help="Optional strict mode: require the target row's unread badge. Normally read exact visible/current groups too.",
     )
     parser.add_argument("--send", action="store_true", help="Required for live Cloud submission and guarded replies.")
     parser.add_argument("--json", action="store_true")
@@ -91,10 +92,21 @@ def main() -> int:
     configs = discover_configs(args.configs)
     if not configs and not remote_group_sync_enabled():
         raise SystemExit("No OCR group configs found. Set WECHAT_OCR_GROUP_CONFIGS first.")
+    last_heartbeat = 0.0
     while True:
         results = scan_once(args, configs)
-        if args.json or args.once or any(not item.get("ok") for item in results):
-            print(json.dumps({"checked_at": datetime.now().isoformat(timespec="seconds"), "results": results}, ensure_ascii=False), flush=True)
+        heartbeat_due = time.monotonic() - last_heartbeat >= 60
+        if args.json or args.once or heartbeat_due or any(
+            not item.get("ok") or item.get("submitted") or item.get("response_sent")
+            for item in results
+        ):
+            print(json.dumps({
+                "checked_at": datetime.now().isoformat(timespec="seconds"),
+                "registry_observed_titles": _REMOTE_GROUP_CACHE.get("observed_count", 0),
+                "registry_admitted_groups": len(_REMOTE_GROUP_CACHE.get("configs") or []),
+                "results": results,
+            }, ensure_ascii=False), flush=True)
+            last_heartbeat = time.monotonic()
         if not args.loop:
             return 0 if all(item.get("ok") for item in results) else 1
         time.sleep(max(0.8, args.interval))
@@ -351,12 +363,14 @@ def registered_group_configs(
     try:
         from wechat_personal_group_cloud import build_registry_client
 
-        # Discover only generated titles in currently visible unread rows.
+        # Read status is not identity: the currently open chat is already read.
+        # Discover generated titles only on the visible desktop; Cloud still
+        # requires a live code and exact registered prefix before admission.
         # No local UUID exists yet for a new group: Cloud must resolve its
         # registered prefix before we can create its isolated configuration.
         discovery_error = ""
         try:
-            pending_titles = visible_titles if visible_titles is not None else visible_unread_group_titles(
+            pending_titles = visible_titles if visible_titles is not None else visible_registered_group_titles(
                 os.environ.get("WECHAT_DISPLAY", ":97")
             )
         except Exception as exc:
@@ -384,7 +398,7 @@ def registered_group_configs(
             local = local_configs.get(group_id)
             if binding_status == "pending" and not local and title not in pending_titles:
                 # A pending group needs either an operator's exact local entry
-                # or its own visible unread row, plus Cloud's live code check.
+                # or its own visible title, plus Cloud's live code check.
                 continue
             local_title = str(local[0].get("chat_name") or "").strip() if local else ""
             if not title and binding_status == "bound":
@@ -441,6 +455,7 @@ def registered_group_configs(
             "error": "",
             "local_group_key": local_group_key,
             "discovery_error": discovery_error,
+            "observed_count": len(pending_titles),
         })
         return list(configs)
     except Exception as exc:
@@ -473,6 +488,9 @@ def scan_group(
     config["_runtime_state_path"] = str(state_path)
     target = target_from_config(config, chat_name)
     extracted: str | None = None
+    messages: list[dict[str, Any]] = []
+    observed: list[tuple[str, str]] = []
+    title_failure: dict[str, Any] | None = None
     extraction_method = "not_scanned"
     opened = False
     rows: list[dict[str, Any]] = []
@@ -488,11 +506,12 @@ def scan_group(
             window = gui.wait_for_main_wechat_window(env, timeout=10)
             if not window or window.width < 500 or window.height < 500:
                 raise RuntimeError("WECHAT_ENTRY_REQUIRED: the Agent WeChat window is not ready")
-            # The group must already be visible in the chat list and its own row
-            # must carry a red unread marker. This prevents idle global search
-            # and avoids treating an unrelated group's badge as a trigger.
+            # A badge is only an activity hint. Opening a group clears it, so
+            # requiring it would suppress every subsequent message in that chat.
+            # open_target still requires the exact current/visible title and
+            # cannot search globally or fall back to an unverified conversation.
             unread_gate_passed = has_unread_badge(env, window, target, evidence)
-            if unread_gate_passed:
+            if unread_gate_passed or not getattr(args, "require_unread_badge", False):
                 # Serialize navigation, bubble Copy, and clipboard access with every
                 # other GUI sender on this isolated WeChat desktop.
                 with GUI_LOCK.open("a", encoding="utf-8") as lock:
@@ -503,8 +522,7 @@ def scan_group(
                         opened_result = gui.open_target(
                             env, window, target, pause=float(config.get("open_pause_seconds") or 0.6),
                             out_dir=evidence, shot_prefix="ocr-open", skip_title_guard=False,
-                            # Only a visible unread row may be opened. Search
-                            # fallback is intentionally disabled for this GUI
+                            # Search fallback is intentionally disabled for GUI
                             # ingress so idle groups never populate the search box.
                             prefer_current=True, allow_search=False,
                             fail_closed_after_visible_match=True,
@@ -512,31 +530,38 @@ def scan_group(
                     finally:
                         gui.title_crop_regions = original_title_regions
                     if not opened_result.get("ok"):
-                        return {
-                            "ok": False, "chat": chat_name, "status": "title_guard_failed",
+                        title_failure = {
+                            "status": "title_guard_failed",
                             "method": opened_result.get("method"), "window_title": opened_result.get("window_title"),
                         }
-                    opened = True
-                    extraction = ocr_triggered_message(
-                        env,
-                        window,
-                        config,
-                        evidence,
-                        prefer_binding_code=not bool(state.get("personal_group_cloud_binding_id")),
-                    )
-                    extracted = str(extraction.get("text") or "")
-                    extraction_method = str(extraction.get("method") or "none")
+                        extraction_method = "title_guard_failed"
+                    else:
+                        opened = True
+                        extraction = ocr_triggered_message(
+                            env, window, config, evidence,
+                            prefer_binding_code=not bool(state.get("personal_group_cloud_binding_id")),
+                            all_messages=True,
+                        )
+                        messages = extraction.get("messages", [extraction])
+                        extraction_method = str(extraction.get("method") or "none")
             else:
                 extraction_method = "no_unread_badge"
-        if extracted:
-            row, fingerprint = build_ocr_row(config, state, extracted)
-            if not ocr_fingerprint_is_recent(state, fingerprint, extracted):
-                if seed_only and extraction_method != "ocr_binding_code":
+        for message in messages:
+            text = str(message.get("text") or "")
+            if not text:
+                continue
+            row, fingerprint = build_ocr_row(config, state, text)
+            if fingerprint not in {item[0] for item in observed} and not ocr_fingerprint_is_recent(state, fingerprint, text):
+                if (seed_only and not unread_gate_passed
+                    and config.get("binding_status") != "pending"
+                    and message.get("method") != "ocr_binding_code"):
                     # A process restart or newly added group must establish a
                     # visible-message baseline without replaying old questions.
                     seeded = True
                 else:
                     rows.append(row)
+                observed.append((fingerprint, text))
+                extracted = text
     result = run_cloud_once(
         config, state, rows, send=True,
         eligible=lambda _row: True,
@@ -545,32 +570,42 @@ def scan_group(
         send_text=send_gui_message,
         send_file=send_gui_file,
     )
-    if extracted and (rows or seeded):
-        state.setdefault("ocr_seen_fingerprints", []).append(fingerprint)
+    state = result.get("state") or state
+    if observed:
+        state.setdefault("ocr_seen_fingerprints", []).extend(item[0] for item in observed)
         state["ocr_seen_fingerprints"] = state["ocr_seen_fingerprints"][-200:]
         times = state.setdefault("ocr_fingerprint_times", {})
         if isinstance(times, dict):
-            times[fingerprint] = int(time.time())
+            times.update({item[0]: int(time.time()) for item in observed})
             state["ocr_fingerprint_times"] = {
                 str(key): int(value) for key, value in list(times.items())[-200:]
                 if str(key)
             }
         state["ocr_last_text"] = extracted[:500]
         state["ocr_last_at"] = int(time.time())
-    save_state(state_path, result.get("state") or state)
+    state["ocr_last_poll_at"] = int(time.time())
+    if scan_gui:
+        state["ocr_last_scan_at"] = int(time.time())
+        state["ocr_last_scan_method"] = extraction_method
+        state["ocr_last_detected_count"] = len(messages)
+        state["ocr_last_queued_count"] = len(rows)
+    save_state(state_path, state)
     metrics = result.get("metrics") or {}
     delivery_error = str(metrics.get("send_error") or "")
     return {
-        "ok": not bool(delivery_error),
+        "ok": not bool(delivery_error or title_failure),
         "chat": chat_name,
         "opened": opened,
-        "text_detected": bool(extracted),
+        "text_detected": bool(messages),
         "extraction_method": extraction_method,
         "seeded": seeded,
+        "detected_count": len(messages),
+        "queued_count": len(rows),
         "submitted": bool(result.get("task_enqueued")),
         "response_sent": bool(result.get("response_sent")),
         "metrics": metrics,
         **({"error": delivery_error} if delivery_error else {}),
+        **(title_failure or {}),
     }
 
 
@@ -591,39 +626,8 @@ def group_id_is_supported(group_id: str) -> bool:
 
 
 def ocr_title_crop_regions(window: gui.Window) -> list[dict[str, int | str]]:
-    """Crop the group header on narrow WeChat windows without toolbar icons.
-
-    The shared sender uses a fixed 360px offset intended for wider windows.
-    On the current WeChat 4.x window (about 916px wide), the conversation pane
-    begins earlier, so that crop cuts the first characters from the title.
-    Keep this adjustment local to the opt-in OCR ingress.
-    """
-    if window.width < 760:
-        return [{
-            "label": "ocr_group_popup_header",
-            "left": window.x + 18,
-            "top": window.y + 35,
-            "width": max(260, window.width - 70),
-            "height": 78,
-        }]
-    left_offset = min(360, max(260, int(window.width * 0.34)))
-    width = max(260, min(420, int(window.width * 0.42)))
-    return [
-        {
-            "label": "ocr_group_header",
-            "left": window.x + left_offset,
-            "top": window.y + 32,
-            "width": width,
-            "height": 78,
-        },
-        {
-            "label": "ocr_group_header_high",
-            "left": window.x + left_offset,
-            "top": window.y,
-            "width": width,
-            "height": 96,
-        },
-    ]
+    """Use the same header geometry for ingress identity and outbound delivery."""
+    return GUI_TITLE_CROP_REGIONS(window)
 
 
 def ocr_triggered_text(env: dict[str, str], window: gui.Window, config: dict[str, Any], evidence: Path) -> str:
@@ -637,7 +641,8 @@ def ocr_triggered_message(
     evidence: Path,
     *,
     prefer_binding_code: bool = False,
-) -> dict[str, str]:
+    all_messages: bool = False,
+) -> dict[str, Any]:
     region = chat_region(window, config)
     source = evidence / "screen.png"
     crop = evidence / "chat.png"
@@ -646,22 +651,56 @@ def ocr_triggered_message(
     tsv = run_command(["tesseract", str(crop), "stdout", "-l", "chi_sim+chi_tra+eng", "--psm", str(config.get("ocr_psm") or 11), "tsv"], env, check=False).stdout
     lines = parse_ocr_lines(tsv)
     prefixes = [str(item).strip() for item in (config.get("personal_group_cloud") or {}).get("trigger_prefixes", []) if str(item).strip()]
-    # A screenshot contains the full visible history. Use the newest OCR line
-    # addressed to the Agent; concatenating every line after the first match
-    # would resubmit older messages whenever the chat remains open. A newly
-    # opened group has to claim an older visible code before handling a newer
-    # question, otherwise the question masks the code and the group remains
-    # unbound. Once a binding exists, return to the newest addressed line so
-    # an old code cannot starve normal questions.
+    # Keep bubbles separate and chronological. Picking only the newest question
+    # silently loses earlier messages arriving between polling passes. Native
+    # Copy supplies each full bubble; the state-backed fingerprint suppresses
+    # history across repeated scans and process restarts.
     binding_code = ""
+    binding_line: dict[str, Any] | None = None
     for line in reversed(lines):
-        match = CODE_RE.fullmatch(str(line["text"]).strip())
-        if match:
-            binding_code = match.group(0).upper()
+        compact = "".join(str(line["text"]).split())
+        match = CODE_RE.fullmatch(compact)
+        # A small glyph can disappear (J/I) or become punctuation. Such a line
+        # may locate a candidate bubble, but only its exact native Copy text may
+        # establish a valid code. Never repair/guess the code sent to Cloud.
+        native_candidate = bool(
+            re.fullmatch(r"[A-Za-z0-9|!(){}\[\]._-]{6,12}", compact)
+            and any(character.isdigit() for character in compact)
+        )
+        if match or native_candidate:
+            binding_code = match.group(0).upper() if match else ""
+            binding_line = line
+            # OCR often splits or misreads tiny code glyphs. Use it to locate
+            # the bubble, then prefer its exact native text just like questions.
+            point = ocr_line_screen_point(line, region, scale=1.6)
+            if point and str(os.environ.get("WECHAT_OCR_GROUP_NATIVE_COPY", "true")).lower() != "false":
+                copied = copy_text_bubble(env, window, *point, evidence=evidence)
+                if not copied:
+                    text_x = region["left"] + round((line["left"] + line["right"]) / 3.2)
+                    text_y = region["top"] + round((line["top"] + line["bottom"]) / 3.2)
+                    copied = copy_code_word(env, window, text_x, text_y)
+                if copied:
+                    native_match = CODE_RE.fullmatch(copied.strip())
+                    if not native_match:
+                        binding_code = ""
+                        binding_line = None
+                        continue
+                    binding_code = native_match.group(0).upper()
+            if not binding_code:
+                binding_line = None
+                continue
             break
-    if prefer_binding_code and binding_code:
+    if prefer_binding_code and binding_code and not all_messages:
         return {"text": binding_code, "method": "ocr_binding_code"}
-    for line in reversed(lines):
+    messages: list[dict[str, str]] = []
+    seen_text: set[str] = set()
+    selected_lines = lines if all_messages else list(reversed(lines))
+    if all_messages and prefer_binding_code and binding_code:
+        # Binding must precede the questions in the same visible batch. Earlier
+        # history belongs to the previous/unbound session, not this connection.
+        code_index = lines.index(binding_line)
+        selected_lines = lines[code_index:]
+    for line in selected_lines:
         text = line["text"]
         if any(prefix.casefold() in text.casefold() for prefix in prefixes):
             copied = ""
@@ -675,12 +714,23 @@ def ocr_triggered_message(
                     # A failed native copy can return a prior OCR/Tesseract
                     # dump from the clipboard. Never submit diagnostic rows as
                     # a user's question; require the next clean message.
-                    return {"text": "", "method": "invalid_native_copy"}
-                return {"text": normalized[:30_000], "method": "native_copy"}
-            return {"text": normalize_message_text(text)[:30_000], "method": "ocr_fallback"}
-        match = CODE_RE.fullmatch(text.strip())
-        if match:
-            return {"text": match.group(0).upper(), "method": "ocr_binding_code"}
+                    if not all_messages:
+                        return {"text": "", "method": "invalid_native_copy"}
+                    continue
+                message = {"text": normalized[:30_000], "method": "native_copy"}
+            else:
+                message = {"text": normalize_message_text(text)[:30_000], "method": "ocr_fallback"}
+        else:
+            if line is not binding_line:
+                continue
+            message = {"text": binding_code, "method": "ocr_binding_code"}
+        if not all_messages:
+            return message
+        if message["text"] not in seen_text:
+            seen_text.add(message["text"])
+            messages.append(message)
+    if all_messages:
+        return {"text": "", "method": "visible_batch", "messages": messages}
     return {"text": "", "method": "none"}
 
 
@@ -696,7 +746,10 @@ def parse_ocr_lines(
     if scale <= 0:
         raise ValueError("OCR coordinate scale must be positive")
     groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
-    for raw in csv.DictReader(StringIO(tsv), delimiter="\t"):
+    # Tesseract TSV has literal text, not CSV quoted fields. An unmatched quote
+    # in a rename notice otherwise swallows subsequent rows into one text cell
+    # (the numeric TSV dumps previously forwarded into customer conversations).
+    for raw in csv.DictReader(StringIO(tsv), delimiter="\t", quoting=csv.QUOTE_NONE):
         text = str(raw.get("text") or "").strip()
         if not text:
             continue
@@ -750,8 +803,11 @@ def ocr_line_screen_point(
     except (KeyError, TypeError, ValueError):
         return None
     return (
-        region["left"] + round(((left + right) / 2) / scale),
-        region["top"] + round(((top + bottom) / 2) / scale),
+        # Current Linux WeChat does not consistently open the bubble menu on
+        # selectable text. Its padded background immediately after the text
+        # opens the full-message menu, including for multiline messages.
+        region["left"] + round(right / scale) + 5,
+        region["top"] + round(bottom / scale) + 1,
     )
 
 
@@ -769,7 +825,9 @@ def copy_text_bubble(
     menu_open = False
     try:
         owner = start_clipboard_probe(env, sentinel)
-        gui.run(["xdotool", "mousemove", str(x), str(y), "click", "3"], env=env)
+        gui.run(["xdotool", "mousemove", str(x), str(y)], env=env)
+        time.sleep(0.15)
+        gui.run(["xdotool", "click", "3"], env=env)
         menu_open = True
         time.sleep(0.20)
         menu_screenshot = evidence / "copy-menu.png"
@@ -808,11 +866,41 @@ def copy_text_bubble(
     except Exception:
         return ""
     finally:
-        # Escape closes a still-open native menu if OCR or clipboard validation
-        # failed. It does not alter the draft or activate another conversation.
+        # Escape in the main Linux client can open its logout confirmation
+        # when no menu actually appeared. A blank chat-margin click only
+        # dismisses the menu/selection and never invokes a session action.
         if menu_open:
-            gui.run(["xdotool", "key", "Escape"], env=env, check=False)
+            dismiss_bubble_menu(env, window)
         stop_clipboard_probe(owner)
+
+
+def copy_code_word(env: dict[str, str], window: gui.Window, x: int, y: int) -> str:
+    """Copy a standalone code using native word selection if its menu fails.
+
+    Only used for OCR-located standalone code candidates. Do not use selected
+    words for questions: those require the complete bubble, including newlines.
+    """
+    sentinel = f"__OVERTREE_CODE_COPY_{os.getpid()}_{time.time_ns()}__"
+    owner = None
+    try:
+        owner = start_clipboard_probe(env, sentinel)
+        gui.double_click(env, x, y)
+        time.sleep(0.15)
+        gui.run(["xdotool", "key", "--clearmodifiers", "ctrl+c"], env=env)
+        copied = wait_for_clipboard_text(env, sentinel, timeout=1.5).strip()
+        return copied if CODE_RE.fullmatch(copied) else ""
+    except Exception:
+        return ""
+    finally:
+        dismiss_bubble_menu(env, window)
+        stop_clipboard_probe(owner)
+
+
+def dismiss_bubble_menu(env: dict[str, str], window: gui.Window) -> None:
+    gui.run([
+        "xdotool", "mousemove", str(window.x + window.width - 30),
+        str(window.y + window.height - 195), "click", "1",
+    ], env=env, check=False)
 
 
 def start_clipboard_probe(env: dict[str, str], sentinel: str) -> subprocess.Popen[str]:
@@ -950,6 +1038,60 @@ def visible_unread_group_titles(display: str) -> list[str]:
             return unread_registered_titles_from_snapshot(*snapshot)
 
 
+def visible_registered_group_titles(display: str) -> list[str]:
+    """Observe generated prefixes in visible rows/header, independent of read state.
+
+    Discovery never opens a chat and never authorizes one: Cloud validates each
+    observed prefix against its live first-binding registration before scanning.
+    """
+    env = os.environ.copy()
+    env["DISPLAY"] = str(display)
+    env["WECHAT_DISPLAY"] = str(display)
+    window = gui.wait_for_main_wechat_window(env, timeout=1)
+    if not window or window.width < 500 or window.height < 500:
+        return []
+    with GUI_LOCK.open("a", encoding="utf-8") as lock:
+        acquire_lock(lock, 15)
+        with tempfile.TemporaryDirectory(prefix="wechat-discovery-") as temporary:
+            evidence = Path(temporary)
+            titles: set[str] = set()
+            if window.width >= 760:
+                snapshot = unread_chat_list_snapshot(env, window, evidence)
+                if snapshot:
+                    titles.update(registered_titles_from_lines(parse_ocr_lines(snapshot[0])))
+            # The active group may have scrolled out of the list, or be open in
+            # its own native window. Observe only the header, never message text.
+            source = evidence / "header-screen.png"
+            gui.screenshot(env, source)
+            for index, region in enumerate(ocr_title_crop_regions(window)):
+                crop = evidence / f"header-{index}.png"
+                geometry = f"{region['width']}x{region['height']}+{region['left']}+{region['top']}"
+                run_command(["convert", str(source), "-crop", geometry, "+repage", str(crop)], env)
+                tsv = run_command([
+                    "tesseract", str(crop), "stdout", "-l", "chi_sim+chi_tra+eng", "--psm", "11", "tsv",
+                ], env, check=False).stdout
+                titles.update(registered_titles_from_lines(parse_ocr_lines(tsv)))
+            return sorted(titles)[:100]
+
+
+def registered_titles_from_lines(lines: list[dict[str, Any]]) -> set[str]:
+    alphabet = r"[A-HJ-NP-Z2-9]"
+    pattern = re.compile(
+        rf"(?:Over\s*Tree\s*-\s*G\s*-\s*(?:{alphabet}\s*){{5}}{alphabet}"
+        rf"|Over\s*Tree\s*-\s*(?:{alphabet}\s*){{3}}{alphabet})(?=$|[^A-Za-z0-9])",
+        re.IGNORECASE,
+    )
+    titles: set[str] = set()
+    for line in lines:
+        # Title identity starts at the row/header, not in an arbitrary preview
+        # or quoted line containing a generated-looking identifier.
+        match = pattern.match(str(line["text"]).strip())
+        if match:
+            value = "".join(match.group(0).split())
+            titles.add("OverTree-" + value[len("OverTree-"):].upper())
+    return titles
+
+
 def unread_registered_titles_from_snapshot(tsv: str, image: Any) -> list[str]:
     # OCR may split the prefix into several words. Never repair ambiguous
     # letters/digits or accept a partial four-character code from a longer ID.
@@ -1052,9 +1194,8 @@ def red_badge_component_present(image: Any, *, min_pixels: int) -> bool:
 def build_ocr_row(config: dict[str, Any], state: dict[str, Any], text: str) -> tuple[dict[str, Any], str]:
     normalized = normalize_message_text(text)
     # OCR has no durable WeChat message ID. Keep the fingerprint stable across
-    # scans; a short state-backed cooldown below prevents the same visible line
-    # from being submitted on every polling pass while still allowing a later
-    # identical question to be handled.
+    # scans; bounded persisted fingerprints prevent the same visible history
+    # from being submitted again on every polling pass or process restart.
     identity_text = " ".join(normalized.split())
     fingerprint = hashlib.sha256(identity_text.encode("utf-8")).hexdigest()[:32]
     next_id = int(state.get("ocr_next_local_id") or 0) + 1
@@ -1074,15 +1215,10 @@ def recent_fingerprints(state: dict[str, Any]) -> set[str]:
 
 
 def ocr_fingerprint_is_recent(state: dict[str, Any], fingerprint: str, _text: str) -> bool:
-    if fingerprint not in recent_fingerprints(state):
-        return False
-    try:
-        times = state.get("ocr_fingerprint_times") or {}
-        last_at = float(times.get(fingerprint) or state.get("ocr_last_at") or 0)
-    except (TypeError, ValueError):
-        return False
-    cooldown = max(30.0, float(os.environ.get("WECHAT_OCR_DEDUP_SECONDS", "900")))
-    return time.time() - last_at < cooldown
+    # A still-visible old bubble does not become a new message after 15 minutes.
+    # These content IDs already form the Cloud idempotency key; retain the last
+    # 200 rather than repeatedly replaying them on every safety rescan.
+    return fingerprint in recent_fingerprints(state)
 
 
 def send_gui_message(config: dict[str, Any], message: str) -> str:

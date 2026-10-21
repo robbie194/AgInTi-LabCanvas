@@ -31,10 +31,12 @@ class WeChatGuiSendTests(unittest.TestCase):
 
         regions = module.title_crop_regions(window)
 
-        self.assertEqual(regions[0]["label"], "main_right_header_adaptive")
-        self.assertEqual(regions[0]["left"], 813)
-        self.assertEqual(regions[0]["width"], 384)
-        self.assertEqual(regions[1]["label"], "main_right_header_adaptive_high")
+        self.assertEqual(regions[0]["label"], "main_right_header_compact")
+        self.assertEqual(regions[0]["left"], 941)
+        self.assertEqual(regions[0]["width"], 300)
+        self.assertLessEqual(regions[0]["height"], 50)
+        self.assertEqual(regions[1]["label"], "main_right_header_adaptive")
+        self.assertEqual(regions[2]["label"], "main_right_header_adaptive_high")
 
     def test_focus_synchronizes_x_focus_before_raise(self):
         module = load_wechat_gui_send()
@@ -700,7 +702,7 @@ class WeChatGuiSendTests(unittest.TestCase):
             module.run = original_run
 
         self.assertFalse(result["ok"])
-        self.assertEqual(sum(1 for call in calls if call[0] == "tesseract"), 2)
+        self.assertEqual(sum(1 for call in calls if call[0] == "tesseract"), 3)
 
     def test_title_guard_accepts_configured_ocr_alias(self):
         module = load_wechat_gui_send()

@@ -75,11 +75,11 @@ Cloud project/session. Its binding confirmation was verified in the group on
 disabled by default. The Cloud group-registration UI/API and compact group-name
 matching are deployed to the live Cloud service. The Agent workstation syncs
 groups with an active binding. For first binding, it sends only generated
-prefixes seen in currently visible unread chat-list rows to the signed Cloud
+prefixes seen in currently visible chat-list rows or the open group header to the signed Cloud
 registry (or exact IDs already configured locally). Cloud returns a pending
 group only if its own unused connection code is still valid. No per-customer
-local config is required. The OCR monitor rechecks that exact row's unread
-marker and the opened title before reading; inbound global search stays off.
+local config is required. The OCR monitor verifies the opened title before
+reading; read messages remain eligible and inbound global search stays off.
 Unobserved pending groups, expired codes, and revoked bindings are ignored. The preconfigured pilot
 remains active through the same Cloud registration and binding checks.
 
@@ -89,7 +89,7 @@ WeChat group, adds the Agent account and the intended members, then gives the
 group that name, optionally followed by a readable suffix such as
 `OverTree-ABCD-论文讨论`. The customer returns to `/wechat`, chooses that
 registered group plus a project and session, and generates a one-time code.
-The customer sends the code only in the named group. When its unread row is
+The customer sends the code only in the named group. When its row or current header is
 visible on the Agent workstation, the monitor resolves its registered prefix
 to the Cloud UUID and creates isolated private state automatically. The local LabCanvas adapter checks the registered
 group-name prefix and exact Cloud group identity before claiming the code;
@@ -145,19 +145,23 @@ one private group config with `wechat_ocr_group_config.py --enable`, verify it
 with a one-shot `wechat_ocr_group_ingress.py --once --send`, then use
 `reload-monitors`. (The generator's `--enable` sets the private config and
 `WECHAT_OCR_GROUP_ENABLED`; omit it to keep preparation disabled.) It reads only the
-newest visible line containing `@OverTree` or an eight-character binding code,
-deduplicates that line for a configurable cooldown, and does not read the
-WeChat database or process memory. Inbound media is deferred. Result files use
+visible `@OverTree` bubbles in chronological order or a standalone eight-character
+binding code. It retains the last 200 normalized fingerprints across restarts
+and does not read the WeChat database or process memory. Inbound media is deferred. Result files use
 the shared Cloud plan and the existing guarded GUI delivery path once the
 pending Cloud/Gateway/LabCanvas changes are deployed. OCR replies use the
 visible Send control in X desktop coordinates and verify that the composer
 clears; noVNC browser scaling does not change those coordinates. See
 [the OCR setup](docs/WECHAT_PERSONAL_GROUP_CLOUD.md#guiocr-group-ingress).
-For OCR ingress, local OCR first matches the exact configured chat-list title
-and checks for a red unread marker in that row. Without that marker, the group
-is not opened and its title is never typed into WeChat search. The monitor
-verifies the opened title before reading messages; every other target still
-requires the explicit `WECHAT_ENABLE_GLOBAL_ACCOUNT_SEARCH=1` operator setting.
+For OCR ingress, an exact current or visible group may be read even without a
+red unread marker. `WECHAT_OCR_GROUP_REQUIRE_BADGE=1` explicitly opts back into
+badge-only mode; it is off by default. Inbound global search remains disabled.
+Ingress and delivery share compact header crops that exclude left-list icons
+and sender avatars. A failed inbound title check does not prevent Cloud task
+and outbox reconciliation; sending still independently verifies the target.
+The monitor logs a heartbeat at least every minute and persists per-group scan
+time/method/counts privately. See
+[the repair and validation record](references/wechat-ocr-read-state-repair-2026-10-21.md).
 
 ## Quick Start
 

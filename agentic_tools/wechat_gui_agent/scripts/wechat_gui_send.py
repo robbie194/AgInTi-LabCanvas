@@ -2141,6 +2141,18 @@ def title_crop_regions(window: Window) -> list[dict[str, int | str]]:
             }
         )
     elif window.width < 1100:
+        # Current Linux WeChat can keep a much wider conversation list than
+        # the older 34%-offset layout. Try the actual right-hand header alone
+        # before the legacy crops: otherwise the search '+' and sender avatar
+        # become extra title characters and reject the correct conversation.
+        header_left = int(window.width * 0.48)
+        regions.append({
+            "label": "main_right_header_compact",
+            "left": window.x + header_left,
+            "top": window.y + 32,
+            "width": max(200, min(300, window.width - header_left - 100)),
+            "height": 50,
+        })
         # Recent Linux WeChat windows commonly open around 900px wide. The
         # conversation header starts left of the legacy 360px crop offset, so
         # use a proportion-based crop so the header is not cut off at this

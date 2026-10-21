@@ -148,8 +148,8 @@ private config for the exact group `OvertreeAI 测试` at
 `/home/overtree-wechat/.local/share/overtree-wechat/labcanvas-private/OvertreeAI-ocr-group.json`.
 Its local routing ID is derived from the title (`ocr-title-7fe7426e296e5304da64c1dc`);
 it is not a WeChat database/group ID. The scanner runs every three seconds in
-the isolated `overtree-wechat` desktop on `:97` and only forwards the newest
-visible line containing `@OverTree` or a standalone 8-character binding code.
+the isolated `overtree-wechat` desktop on `:97` and forwards visible addressed bubbles in order
+or a standalone 8-character binding code.
 The `OvertreeAI 测试` pilot predates group registration and still uses its
 title-derived local routing ID; it has not been renamed or migrated.
 
@@ -166,9 +166,10 @@ sudo -u overtree-wechat env HOME=/home/overtree-wechat \
 ```
 
 Run the same command again with `--enable`; this marks the private config
-active and sets `WECHAT_OCR_GROUP_ENABLED=true`. The monitor now always requires
-the exact row's unread badge; `WECHAT_OCR_DEDUP_SECONDS=900` remains the default.
-Then run one guarded pass (the test group must be visible with an unread badge):
+active and sets `WECHAT_OCR_GROUP_ENABLED=true`. The monitor accepts the exact
+current/visible group without a badge by default;
+`WECHAT_OCR_GROUP_REQUIRE_BADGE=1` is optional strict mode. The last 200 content
+fingerprints persist across restarts. Then run one guarded pass:
 
 ```bash
 sudo -u overtree-wechat env HOME=/home/overtree-wechat \
@@ -183,7 +184,7 @@ For Cloud-registered groups, set `WECHAT_OCR_GROUP_REMOTE_SYNC=true` in the
 private local environment and reload monitors after deploying the matching
 Cloud version. Cloud returns all currently bound groups, plus a pending
 first-binding group only when its exact ID is configured locally or its
-generated prefix was observed in a visible unread chat-list row, and it has an
+generated prefix was observed in a visible chat-list row or current group header, and it has an
 unused, unexpired code for the same Agent account and owning project/session.
 The monitor sends only observed prefixes as signed `pendingTitle` parameters;
 it does not fetch every pending registration or search for groups. This avoids
@@ -194,14 +195,13 @@ of the Agent-WeChat desktop, reduces the conversation-list/chat-tail crop to a
 quantized 96x64 signature, and compares its hash with the previous sample. An
 unchanged screen skips group navigation and OCR. A changed screen, new group
 configuration, or the `WECHAT_OCR_GROUP_ACTIVE_RESCAN_SECONDS` safety interval
-(180 seconds by default) starts an active pass. Each configured title is first
-matched against the visible chat list; the monitor proceeds only when that
-exact row has its own red unread badge. It never types a group title into
-WeChat's global search box. Pending first-binding groups can receive their
-one-time code only while visible with an unread badge. An unbound group with
-no valid code, an expired registration, and a revoked group are not searched
-or scanned. Already-running Cloud tasks and queued replies continue to be
-reconciled during idle passes without opening a chat.
+(180 seconds by default) starts an active pass. An active pass verifies the exact current or
+visible title before reading. Opening a chat clears its badge, so a badge is
+no longer required by default. The monitor never searches globally for inbound
+messages. Pending discovery observes only visible rows/header and Cloud still
+requires a live unused code. Expired or revoked registrations are not admitted.
+Cloud task and reply reconciliation continues even if inbound title checking
+fails; each delivery independently checks the intended target.
 
 Older pilot bindings may not have a registered Cloud group slot. In that case,
 the monitor asks Cloud to validate only group IDs from its existing local group
@@ -211,18 +211,15 @@ legacy group only when that exact ID still has a live binding; the local title
 remains the visual guard. This preserves the current pilot without discovering
 or scanning other personal-WeChat groups.
 
-During an active pass, OCR locates the newest configured `@OverTree` line. The
-monitor right-clicks inside that line's message bubble, identifies the native
-`复制`/`Copy` menu item in a magnified crop beside the click, corroborates it
-with a neighboring menu action, and reads the X clipboard only after verifying
-it no longer contains a unique sentinel. The copied bubble text is the
-submitted message, including its line breaks; OCR text remains the fallback if
-the menu or clipboard check fails. A standalone eight-character binding code
-continues to be accepted from OCR. The same normalized message is suppressed for 15
-minutes by default (`WECHAT_OCR_DEDUP_SECONDS`); an eligible changed message
-can enter immediately. The red-marker check is a local pixel heuristic scoped
-to the exact OCR-matched chat-list row; title verification remains mandatory
-before reading or sending. Inbound images and files are
+During an active pass, OCR locates each configured `@OverTree` bubble in
+chronological order. Native `复制`/`Copy` supplies complete text; a fresh clipboard
+sentinel rejects stale clipboard content. Native Copy also verifies standalone
+codes when available. The last 200 content fingerprints persist without a
+15-minute expiry, so old visible history does not replay after restart or an
+idle period. Identical normalized message content shares the existing Cloud
+idempotency key; this GUI transport does not provide native message IDs.
+Ingress and outbound delivery use the same compact header geometry, and title
+verification remains mandatory before reading or sending. Inbound images and files are
 intentionally not read in this first OCR path. Text replies from OCR groups
 click the visible bottom-right Send control in X desktop coordinates and verify
 that the draft cleared; this route does not require a native WeChat database
