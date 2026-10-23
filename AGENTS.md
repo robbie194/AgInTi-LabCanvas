@@ -231,3 +231,11 @@ For the isolated Linux WeChat preview, use the loopback UTF-8 clipboard wrapper
 at port 6108 (`wechat_preview.py`), not the legacy VNC Clipboard panel for
 Chinese text. Keep its exact Host/Origin/token checks and 1 MiB limit. Preserve
 the running client during preview maintenance; `--no-xdamage` is WeChat-only.
+
+For the OverTree personal-group Cloud branch, the current customer policy is
+text-only input. Native non-text messages receive the local unsupported notice
+and must not enter media resolution, upload, binding-code interpretation or
+Cloud task submission. This overrides general LabCanvas media-intake guidance
+for this branch only. Preserve generated outbound media and other LabCanvas
+transports. The OCR pilot may inspect native context menus to reject visible
+media; it must never open media or forward media-body OCR as a user question.

@@ -26,6 +26,59 @@ def load_module():
 
 
 class WeChatOcrGroupIngressTests(unittest.TestCase):
+    def test_media_menu_requires_native_actions_and_preserves_text_copy(self):
+        module = load_module()
+        def lines(*labels):
+            return [{"text": label, "left": 500, "right": 580, "top": 300 + i * 32,
+                     "bottom": 320 + i * 32} for i, label in enumerate(labels)]
+        for labels, kind in [(('Save As', 'Forward'), 'image'), (('转文字', '删除'), 'voice'),
+                             (('Open Folder', 'Forward'), 'file'), (('Forward', 'Delete'), 'other')]:
+            self.assertEqual(module.media_kind_from_menu(lines(*labels), 500, 300), kind)
+        self.assertEqual(module.media_kind_from_menu(lines('Copy', 'Forward', 'Delete'), 500, 300), '')
+        self.assertEqual(module.media_kind_from_menu(lines('Save As'), 500, 300), '')
+        self.assertEqual(module.media_kind_from_menu(lines('普通文字'), 500, 300), '')
+        self.assertEqual(module.media_kind_from_menu(lines('Save As', 'Forward'), 1300, 800), '')
+
+    def test_media_locator_only_reads_incoming_avatar_column_and_caches_menu_probe(self):
+        from PIL import Image, ImageDraw
+        module = load_module()
+        window = types.SimpleNamespace(x=0, y=0, width=908, height=666)
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Image.new('RGB', (908, 666), (248, 248, 248))
+            draw = ImageDraw.Draw(image)
+            # Main layout incoming avatar is left of the bubble; own outgoing
+            # avatar is on the far right and must never cause unsupported echo.
+            pane = int(module.ocr_title_crop_regions(window)[0]['left'])
+            draw.rectangle((pane + 16, 130, pane + 48, 165), fill='blue')
+            draw.rectangle((850, 250, 885, 285), fill='green')
+            source = Path(tmp) / 'screen.png'
+            image.save(source)
+            self.assertEqual(len(module.incoming_bubble_candidates(source, window)), 1)
+            config = {}
+            with mock.patch.object(module, 'inspect_media_bubble', return_value='voice') as inspect:
+                first = module.visible_media_messages({}, window, source, Path(tmp), config)
+                second = module.visible_media_messages({}, window, source, Path(tmp), config)
+            self.assertEqual(first, second)
+            self.assertEqual(first[0]['local_type'], 34)
+            self.assertEqual(inspect.call_count, 1)
+
+    def test_media_body_ocr_cannot_become_a_question_or_binding_code(self):
+        module = load_module()
+        window = types.SimpleNamespace(x=0, y=0, width=908, height=666)
+        media = {"text": "[media:unique]", "method": "native_media_menu", "local_type": 49, "top": 120}
+        line = {"text": "@OverTree 图片里的文字", "left": 100, "right": 230, "top": 64, "bottom": 80}
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(module.gui, 'screenshot'), \
+             mock.patch.object(module, 'run_command', return_value=types.SimpleNamespace(stdout='')), \
+             mock.patch.object(module, 'parse_ocr_lines', return_value=[line]), \
+             mock.patch.object(module, 'visible_media_messages', return_value=[media]), \
+             mock.patch.object(module, 'incoming_bubble_candidates', return_value=[{'top': 120}]), \
+             mock.patch.object(module, 'copy_text_bubble') as copy:
+            result = module.ocr_triggered_message({}, window, {'personal_group_cloud': {'trigger_prefixes': ['@OverTree']}},
+                                                  Path(tmp), all_messages=True)
+        self.assertEqual(result['messages'], [media])
+        copy.assert_not_called()
+
     def test_read_current_group_submits_multiple_messages_once_and_keeps_polling(self):
         module = load_module()
         with tempfile.TemporaryDirectory() as tmp:

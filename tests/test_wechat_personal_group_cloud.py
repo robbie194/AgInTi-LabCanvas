@@ -268,19 +268,45 @@ class PersonalGroupCloudTests(unittest.TestCase):
         self.assertEqual(sent, ["此群已连接到对应的 OverTree 项目和会话。"])
         self.assertEqual(result["metrics"]["transport"], "personal_group_cloud")
 
-    def test_exact_media_file_is_uploaded_before_cloud_message_submission(self):
+    def test_nontext_inputs_are_rejected_once_without_cloud_or_media_access(self):
+        for kind in (3, 34, 42, 43, 47, 48, 49, 999, 0):
+            with self.subTest(kind=kind):
+                client = FakeClient()
+                state = {}
+                sent = []
+                # Includes a plausible binding code and transcript: neither is
+                # allowed to bypass the message-type guard.
+                row = self.row(kind + 100, "customer-wxid", "ABC23456", local_type=kind)
+                with mock.patch.object(bridge, "_upload_attachments") as upload:
+                    self.run_once(client, [row], state=state, send_text=lambda _c, text: sent.append(text))
+                    self.run_once(client, [row], state=state, send_text=lambda _c, text: sent.append(text))
+                self.assertEqual(sent, [bridge.TEXT_ONLY_NOTICE])
+                self.assertFalse(client.submitted)
+                self.assertFalse(client.claimed)
+                self.assertFalse(client.uploaded)
+                self.assertEqual(client.resolve_calls, 0)
+                upload.assert_not_called()
+
+    def test_nontext_policy_does_not_reply_to_outbound_agent_media(self):
         client = FakeClient()
-        row = self.row(11, "customer-wxid", "@OverTree [WeChat image]", local_type=3)
-        with tempfile.TemporaryDirectory() as folder:
-            image = Path(folder) / "source.png"
-            image.write_bytes(b"exact-image")
-            with mock.patch.object(bridge, "_media_sync_event_files", return_value=[image]):
-                self.run_once(client, [row])
-        self.assertEqual(len(client.uploaded), 1)
-        self.assertEqual(client.uploaded[0][-1], b"exact-image")
-        attachments = client.submitted[0][1]["attachments"]
-        self.assertEqual(attachments[0]["path"], "wechat-inbox/binding/0-source.png")
-        self.assertEqual(attachments[0]["contentType"], "image/png")
+        sent = []
+        self.run_once(client, [self.row(11, "agent-wxid", "[image]", local_type=3)],
+                      send_text=lambda _c, text: sent.append(text))
+        self.assertEqual(sent, [])
+        self.assertFalse(client.submitted)
+
+    def test_unsent_legacy_media_pending_is_removed_without_upload_or_submission(self):
+        client = FakeClient()
+        media = self.row(11, "customer-wxid", "@OverTree image", local_type=3)
+        text = self.row(12, "customer-wxid", "@OverTree 帮我画图")
+        state = {"personal_group_cloud_pending": [{"messageId": "old-media", "sourceRow": media,
+                                                  "submitted": False, "content": "image"}]}
+        sent = []
+        self.run_once(client, [text], state=state, send_text=lambda _c, t: sent.append(t))
+        self.assertEqual(len(client.submitted), 1)
+        self.assertEqual(client.submitted[0][1]["content"], text["content"])
+        self.assertFalse(client.uploaded)
+        self.assertEqual(sent, [bridge.TEXT_ONLY_NOTICE])
 
     def test_ordinary_group_chat_is_ignored_until_someone_mentions_the_agent(self):
         client = FakeClient()

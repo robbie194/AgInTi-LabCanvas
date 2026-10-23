@@ -773,6 +773,15 @@ def _claim_private_group_state(config: dict[str, Any], state: dict[str, Any], gr
     _persist_local_state(config, state)
 
 
+TEXT_ONLY_NOTICE = "暂时只支持文字消息，请用文字描述你的问题。"
+
+
+def is_text_input(row: dict[str, Any]) -> bool:
+    # Native types may carry flags in their upper 32 bits. Missing/unknown
+    # types fail closed; OCR explicitly assigns type 1 only to text bubbles.
+    return (int(row.get("local_type") or 0) & 0xFFFFFFFF) == 1 and not row.get("attachments")
+
+
 def run_once(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str, Any]], *, send: bool,
              eligible: Callable[[dict[str, Any]], bool], inbound: Callable[[dict[str, Any]], bool],
              visible_text: Callable[[dict[str, Any]], str], send_text: Callable[..., Any],
@@ -789,6 +798,40 @@ def run_once(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str,
     now = time.time()
     pending = state.setdefault("personal_group_cloud_pending", [])
     outbox = state.setdefault("personal_group_cloud_outbox", [])
+    _reconcile_outgoing_echoes(state, rows, inbound=inbound, visible_text=visible_text, now=now)
+    rejected = state.setdefault("personal_group_cloud_rejected_input_ids", [])
+
+    def reject_input(row: dict[str, Any], message_id: str) -> None:
+        if message_id not in rejected:
+            _enqueue_outgoing(state, TEXT_ONLY_NOTICE, row, "unsupported-input", message_id=f"unsupported-{message_id}")
+            rejected.append(message_id)
+
+    for row in rows:
+        if inbound(row) and not is_text_input(row):
+            reject_input(row, stable_message_id(row))
+    # Also apply the new policy to pre-upgrade work not yet submitted. Already
+    # running text/file results still follow the normal outbound delivery path.
+    retained = []
+    for item in pending:
+        source = item.get("sourceRow") or {}
+        if not item.get("submitted") and (
+            (source.get("local_type") is not None and not is_text_input(source)) or item.get("attachments")
+        ):
+            reject_input(source, str(item["messageId"]))
+        else:
+            retained.append(item)
+    pending[:] = retained
+    state["personal_group_cloud_rejected_input_ids"] = rejected[-200:]
+    rows = [row for row in rows if not inbound(row) or is_text_input(row)]
+    if rejected:
+        _persist_local_state(config, state)
+    if not rows and not pending and outbox and all(
+        item.get("kind") == "unsupported-input" for item in outbox
+    ):
+        sent, error = _flush_outbox(config, state, send_text, now, send_file)
+        return {"response_sent": sent, "task_enqueued": None, "processed_rows": 0,
+                "metrics": {"transport": "personal_group_cloud", "outbox": len(state.get("personal_group_cloud_outbox") or []),
+                            **({"send_error": error} if error else {})}, "state": state}
     if not rows and not pending and not outbox:
         return {
             "response_sent": None,
@@ -834,7 +877,6 @@ def run_once(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str,
 
     inbound_rows = [row for row in rows if inbound(row)]
     trigger_rows = [row for row in inbound_rows if eligible(row)]
-    _reconcile_outgoing_echoes(state, rows, inbound=inbound, visible_text=visible_text, now=now)
 
     # Old state files stored only raw message IDs. Keep accepting that shape,
     # and store the source locator (never the binding code itself) after this

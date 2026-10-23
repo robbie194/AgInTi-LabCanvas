@@ -2666,3 +2666,23 @@ still shares the remote clipboard; coordinate maintenance under its GUI lock.
 The direct full noVNC fallback remains available, but its Clipboard panel is
 not reliable for Chinese. Do not send a test message or bind a group solely
 to test clipboard transport.
+
+## OverTree text-only input (2026-10-23)
+
+Customer Service and personal coaching groups currently accept text inputs only.
+Reject native non-text/unknown types before interpreting binding codes, source
+media lookup, upload or task submission. Reply locally with
+`暂时只支持文字消息，请用文字描述你的问题。` and retain a bounded per-source rejection
+ID plus the durable outbox before sending. Discard unsubmitted legacy media
+queue items under the same policy; do not cancel already running tasks or alter
+the common Cloud result plan or outbound images/PDF/TXT/Word files.
+
+The OCR pilot has no native message IDs/types. Within the exact-title GUI lock,
+locate only incoming avatars and inspect a bubble's context menu without
+activating media actions. Require corroborating native menu labels; never infer
+a media type from arbitrary OCR words such as “图片” in a customer question.
+Exclude recognized media bodies from both question and binding-code OCR. Cache
+bounded menu classifications/fingerprints, seed old visible history on restart,
+and never inspect outgoing bubbles as incoming media. Unknown/invisible bubbles
+may remain unread: this GUI path cannot promise the completeness of an official
+typed-message API. No media source lookup or agent fallback is allowed.

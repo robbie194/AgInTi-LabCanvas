@@ -537,11 +537,13 @@ def scan_group(
                         extraction_method = "title_guard_failed"
                     else:
                         opened = True
+                        config["_ocr_bubble_kind_cache"] = state.get("ocr_bubble_kind_cache", {})
                         extraction = ocr_triggered_message(
                             env, window, config, evidence,
                             prefer_binding_code=not bool(state.get("personal_group_cloud_binding_id")),
                             all_messages=True,
                         )
+                        state["ocr_bubble_kind_cache"] = config.get("_ocr_bubble_kind_cache", {})
                         messages = extraction.get("messages", [extraction])
                         extraction_method = str(extraction.get("method") or "none")
             else:
@@ -551,6 +553,7 @@ def scan_group(
             if not text:
                 continue
             row, fingerprint = build_ocr_row(config, state, text)
+            row["local_type"] = int(message.get("local_type") or 1)
             if fingerprint not in {item[0] for item in observed} and not ocr_fingerprint_is_recent(state, fingerprint, text):
                 if (seed_only and not unread_gate_passed
                     and config.get("binding_status") != "pending"
@@ -634,6 +637,129 @@ def ocr_triggered_text(env: dict[str, str], window: gui.Window, config: dict[str
     return str(ocr_triggered_message(env, window, config, evidence).get("text") or "")
 
 
+def incoming_bubble_candidates(source: Path, window: gui.Window) -> list[dict[str, Any]]:
+    """Locate incoming avatars, never outgoing bubbles, in the guarded chat.
+
+    The compact Linux layout shares its pane offset with the title guard.
+    Inspecting a context menu is read-only; no media is opened or downloaded.
+    """
+    if not source.is_file():
+        return []
+    from PIL import Image
+    with Image.open(source) as image:
+        image = image.convert("RGB")
+        pane = int(ocr_title_crop_regions(window)[0]["left"])
+        left, right = pane + 16, pane + 42
+        top, bottom = window.y + 90, window.y + window.height - 170
+        if left < 0 or right >= image.width or bottom >= image.height:
+            return []
+        runs = []
+        start = None
+        # Avatars occupy a narrow, fixed column separate from message text.
+        # Require a roughly square filled patch, excluding labels/timestamps.
+        for y in range(top, bottom):
+            background = image.getpixel((pane + 7, y))
+            filled = sum(max(abs(a - b) for a, b in zip(image.getpixel((x, y)), background)) > 30
+                         for x in range(left, right)) >= 18
+            if filled and start is None:
+                start = y
+            if not filled and start is not None:
+                if 24 <= y - start <= 46:
+                    runs.append((start, y))
+                start = None
+        candidates = []
+        for y0, y1 in runs[-12:]:
+            # The first body rows and avatar are stable when the viewport moves;
+            # hash pixels only, without retaining the media or forwarding OCR.
+            patch = image.crop((left, y0, min(window.x + window.width - 75, pane + 280),
+                                min(bottom, y0 + 44)))
+            fingerprint = hashlib.sha256(patch.tobytes()).hexdigest()[:32]
+            candidates.append({"x": pane + 80, "y": y0 + 28, "top": y0, "fingerprint": fingerprint})
+        return candidates
+
+
+def media_kind_from_menu(lines: list[dict[str, Any]], x: int, y: int) -> str:
+    """Require corroborated native menu actions, not words in chat/image OCR."""
+    labels = []
+    for line in lines:
+        cx = (int(line["left"]) + int(line["right"])) // 2
+        cy = (int(line["top"]) + int(line["bottom"])) // 2
+        label = re.sub(r"[\s:：.·()（）]", "", str(line.get("text") or "")).casefold()
+        if abs(cx - x) <= 300 and -340 <= cy - y <= 420:
+            labels.append((label, cx, cy))
+    media_actions = {
+        "image": {"saveas", "saveimageas", "savephoto", "extracttext", "copyimage", "另存为", "另存為", "提取文字", "识别图中文字", "複製圖片", "复制图片"},
+        "voice": {"transcribe", "converttotext", "voicetotext", "转文字", "轉文字", "语音转文字", "語音轉文字", "转为文字", "轉為文字", "播放语音", "播放語音"},
+        "file": {"open", "openfile", "openfolder", "showinfolder", "打开", "打開", "打开文件夹", "打開檔案", "另存为文件"},
+        "other": {"addtostickers", "添加到表情", "添加表情", "viewcontact", "查看名片", "viewlocation", "查看位置"},
+    }
+    for kind, actions in media_actions.items():
+        for label, cx, cy in labels:
+            if label in actions and any(other in CONTEXT_MENU_LABELS and abs(ox-cx) <= 180
+                                       and 8 <= abs(oy-cy) <= 260 for other, ox, oy in labels):
+                return kind
+    # Voice, contact cards, stickers and other native non-text bubbles may
+    # expose only Forward/Delete/etc. A verified text menu always has Copy.
+    if not any(label in COPY_MENU_LABELS or label in {"copyc", "复制c", "複製c"}
+               for label, _x, _y in labels):
+        for label, cx, cy in labels:
+            if label in CONTEXT_MENU_LABELS and any(
+                other != label and other in CONTEXT_MENU_LABELS and abs(ox - cx) <= 180
+                and 8 <= abs(oy - cy) <= 260 for other, ox, oy in labels
+            ):
+                return "other"
+    return ""
+
+
+def inspect_media_bubble(env: dict[str, str], window: gui.Window, candidate: dict[str, Any], evidence: Path) -> str:
+    x, y = int(candidate["x"]), int(candidate["y"])
+    try:
+        gui.run(["xdotool", "mousemove", str(x), str(y), "click", "3"], env=env)
+        time.sleep(0.2)
+        source = evidence / "media-menu.png"
+        crop = evidence / "media-menu-crop.png"
+        gui.screenshot(env, source)
+        left, top = max(window.x, x - 120), max(window.y, y - 340)
+        width = min(550, window.x + window.width - left)
+        height = min(680, window.y + window.height - top)
+        run_command(["convert", str(source), "-crop", f"{width}x{height}+{left}+{top}",
+                     "+repage", "-resize", "250%", str(crop)], env)
+        tsv = run_command(["tesseract", str(crop), "stdout", "-l", "chi_sim+chi_tra+eng",
+                           "--psm", "11", "tsv"], env, check=False).stdout
+        lines = parse_ocr_lines(tsv, scale=2.5, offset=(left, top))
+        kind = media_kind_from_menu(lines, x, y)
+        if kind == "other":
+            # Do not reject ordinary text merely because one OCR pass missed
+            # its Copy action. Confirm generic non-text menus independently.
+            second = run_command(["tesseract", str(crop), "stdout", "-l", "chi_sim+chi_tra+eng",
+                                  "--psm", "6", "tsv"], env, check=False).stdout
+            if media_kind_from_menu(parse_ocr_lines(second, scale=2.5, offset=(left, top)), x, y) != "other":
+                return ""
+        return kind or ("text" if find_copy_menu_action(lines, x, y) else "")
+    finally:
+        dismiss_bubble_menu(env, window)
+
+
+def visible_media_messages(env: dict[str, str], window: gui.Window, source: Path,
+                           evidence: Path, config: dict[str, Any]) -> list[dict[str, Any]]:
+    cache = config.setdefault("_ocr_bubble_kind_cache", {})
+    candidates = incoming_bubble_candidates(source, window)
+    messages = []
+    for candidate in candidates:
+        fingerprint = candidate["fingerprint"]
+        entry = cache.get(fingerprint)
+        if not isinstance(entry, dict) or (not entry.get("kind") and time.time() - float(entry.get("at") or 0) >= 30):
+            entry = {"kind": inspect_media_bubble(env, window, candidate, evidence), "at": time.time()}
+            cache[fingerprint] = entry
+        kind = entry["kind"]
+        if kind and kind != "text":
+            messages.append({"text": f"[不支持的微信消息:{kind}:{fingerprint}]",
+                             "method": "native_media_menu", "local_type": 34 if kind == "voice" else 49,
+                             "top": candidate["top"]})
+    config["_ocr_bubble_kind_cache"] = dict(list(cache.items())[-200:])
+    return messages
+
+
 def ocr_triggered_message(
     env: dict[str, str],
     window: gui.Window,
@@ -650,6 +776,17 @@ def ocr_triggered_message(
     run_command(["convert", str(source), "-crop", f"{region['width']}x{region['height']}+{region['left']}+{region['top']}", "-resize", "160%", str(crop)], env)
     tsv = run_command(["tesseract", str(crop), "stdout", "-l", "chi_sim+chi_tra+eng", "--psm", str(config.get("ocr_psm") or 11), "tsv"], env, check=False).stdout
     lines = parse_ocr_lines(tsv)
+    media_messages = visible_media_messages(env, window, source, evidence, config)
+    # Media bodies can contain arbitrary printed @mentions or eight-character
+    # strings. Never interpret their OCR as text questions or binding codes.
+    media_tops = {int(item["top"]) for item in media_messages}
+    candidates = incoming_bubble_candidates(source, window)
+    boundaries = sorted(int(item["top"]) for item in candidates)
+    def is_media_line(line: dict[str, Any]) -> bool:
+        screen_y = region["top"] + int(line["top"]) / 1.6
+        preceding = [top for top in boundaries if top <= screen_y]
+        return bool(preceding and max(preceding) in media_tops)
+    lines = [line for line in lines if not is_media_line(line)]
     prefixes = [str(item).strip() for item in (config.get("personal_group_cloud") or {}).get("trigger_prefixes", []) if str(item).strip()]
     # Keep bubbles separate and chronological. Picking only the newest question
     # silently loses earlier messages arriving between polling passes. Native
@@ -692,7 +829,7 @@ def ocr_triggered_message(
             break
     if prefer_binding_code and binding_code and not all_messages:
         return {"text": binding_code, "method": "ocr_binding_code"}
-    messages: list[dict[str, str]] = []
+    messages: list[dict[str, Any]] = list(media_messages)
     seen_text: set[str] = set()
     selected_lines = lines if all_messages else list(reversed(lines))
     if all_messages and prefer_binding_code and binding_code:

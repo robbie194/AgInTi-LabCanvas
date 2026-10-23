@@ -98,6 +98,17 @@ pending groups are never searched. Cloud does not create the WeChat group or
 invite people. Later, a new code sent in that same group switches only its
 binding.
 
+OverTree group input is temporarily **text only**, matching Customer Service.
+Inbound voice, images, files, video, stickers and other non-text native rows
+receive `暂时只支持文字消息，请用文字描述你的问题。` locally, before binding-code
+interpretation, attachment lookup/upload or Cloud task submission. The visible
+OCR pilot locates incoming avatar/bubbles and checks their native context menus;
+it never opens media. Media-body OCR is excluded from question/code extraction.
+Unknown menus are left unread rather than opened or downloaded; GUI recognition
+is not an official typed-message feed. Probes and unsupported notices use bounded
+persistent deduplication and baseline old history on restart. Ordinary human
+text still requires the Agent @mention; generated image/file delivery is unchanged.
+
 Result files use a single Cloud delivery plan shared with the Customer Service
 Gateway: text parts are at most 1,800 UTF-8 bytes, the result uses at most five
 messages total including up to four media files, and each file is at most
