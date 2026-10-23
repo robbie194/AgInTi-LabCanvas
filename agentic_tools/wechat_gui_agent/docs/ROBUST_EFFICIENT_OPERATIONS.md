@@ -181,6 +181,10 @@ verifies its title. Per-group private state records scan time/method/counts,
 and a monitor heartbeat is logged every 60 seconds even when idle. Heartbeats
 and unit tests alone do not establish end-to-end delivery. See the
 [repair record](../../../references/wechat-ocr-read-state-repair-2026-10-21.md).
+For the compact 900px Linux client, the native attachment folder is around
+59.4% of the window width. Confirm the file chooser actually opens before
+pasting a path. A click into the empty composer must fail visibly rather than
+be recorded as a sent image.
 
 Read Tesseract TSV as unquoted fields: OCR may return a literal unmatched
 double quote in a chat preview, which must not hide later registered group-title

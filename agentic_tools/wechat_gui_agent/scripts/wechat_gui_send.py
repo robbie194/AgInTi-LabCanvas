@@ -627,7 +627,7 @@ def send_file_to_open_chat(
 
     click(
         env,
-        window.x + int(window.width * 0.456),
+        window.x + int(window.width * 0.594),
         # The attachment toolbar is aligned with the Send button at the
         # bottom edge of the current WeChat window. Older layouts placed it
         # higher, but that coordinate now lands in the empty composer area.

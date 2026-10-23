@@ -251,7 +251,7 @@ class WeChatGuiSendTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "sent-file-submitted")
         self.assertEqual(result["filename"], "report.pdf")
-        self.assertEqual(click.call_args_list[0].args[1:], (456, 666))
+        self.assertEqual(click.call_args_list[0].args[1:], (594, 666))
         self.assertEqual(
             lock_checks,
             [

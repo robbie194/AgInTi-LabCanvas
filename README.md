@@ -162,6 +162,9 @@ and outbox reconciliation; sending still independently verifies the target.
 The monitor logs a heartbeat at least every minute and persists per-group scan
 time/method/counts privately. See
 [the repair and validation record](references/wechat-ocr-read-state-repair-2026-10-21.md).
+Native image/file return uses the guarded WeChat attachment folder in the
+current group. The compact client positions it about 59.4% across the window;
+the sender verifies that a native chooser opens before selecting the file.
 
 ## Quick Start
 
