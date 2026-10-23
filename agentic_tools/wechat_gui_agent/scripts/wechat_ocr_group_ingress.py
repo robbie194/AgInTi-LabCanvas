@@ -719,9 +719,14 @@ def inspect_media_bubble(env: dict[str, str], window: gui.Window, candidate: dic
         source = evidence / "media-menu.png"
         crop = evidence / "media-menu-crop.png"
         gui.screenshot(env, source)
-        left, top = max(window.x, x - 120), max(window.y, y - 340)
-        width = min(550, window.x + window.width - left)
-        height = min(680, window.y + window.height - top)
+        # Native popup menus may extend below/outside the main chat window.
+        # Cropping to the window hid Save As on the real Linux image menu.
+        from PIL import Image
+        with Image.open(source) as screen:
+            screen_width, screen_height = screen.size
+        left, top = max(0, x - 300), max(0, y - 340)
+        width = min(700, screen_width - left)
+        height = min(900, screen_height - top)
         run_command(["convert", str(source), "-crop", f"{width}x{height}+{left}+{top}",
                      "+repage", "-resize", "250%", str(crop)], env)
         tsv = run_command(["tesseract", str(crop), "stdout", "-l", "chi_sim+chi_tra+eng",

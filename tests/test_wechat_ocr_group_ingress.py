@@ -39,6 +39,27 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         self.assertEqual(module.media_kind_from_menu(lines('普通文字'), 500, 300), '')
         self.assertEqual(module.media_kind_from_menu(lines('Save As', 'Forward'), 1300, 800), '')
 
+    def test_native_media_menu_crop_includes_popup_below_main_window(self):
+        from PIL import Image
+        module = load_module()
+        window = types.SimpleNamespace(x=502, y=206, width=908, height=666)
+        action = [{"text": "Save As", "left": 1150, "right": 1210, "top": 930, "bottom": 950},
+                  {"text": "Forward", "left": 1150, "right": 1210, "top": 895, "bottom": 915}]
+        def screenshot(_env, path):
+            Image.new('RGB', (1920, 1080), 'white').save(path)
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(module.gui, 'run'), \
+             mock.patch.object(module.gui, 'screenshot', side_effect=screenshot), \
+             mock.patch.object(module, 'dismiss_bubble_menu'), \
+             mock.patch.object(module.time, 'sleep'), \
+             mock.patch.object(module, 'run_command', return_value=types.SimpleNamespace(stdout='')) as run, \
+             mock.patch.object(module, 'parse_ocr_lines', return_value=action):
+            kind = module.inspect_media_bubble({}, window, {'x': 1152, 'y': 596}, Path(tmp))
+        self.assertEqual(kind, 'image')
+        crop_command = run.call_args_list[0].args[0]
+        # Crop reaches display bottom 1080, rather than window bottom 872.
+        self.assertIn('700x824+852+256', crop_command)
+
     def test_media_locator_only_reads_incoming_avatar_column_and_caches_menu_probe(self):
         from PIL import Image, ImageDraw
         module = load_module()
