@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shlex
+import signal
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -12,9 +15,57 @@ PROFILE = ROOT / "agentic_tools" / "wechat_gui_agent" / "scripts" / "wechat_agen
 TUNNEL = ROOT / "agentic_tools" / "wechat_gui_agent" / "scripts" / "wechat_cloud_tunnel.sh"
 GROUP_CONFIG = ROOT / "agentic_tools" / "wechat_gui_agent" / "scripts" / "wechat_agent_group_config.py"
 INSTALL = ROOT / "agentic_tools" / "wechat_gui_agent" / "scripts" / "wechat_agent_user_install.sh"
+SUPERVISOR = ROOT / "agentic_tools" / "wechat_gui_agent" / "scripts" / "wechat_supervisor_tmux.sh"
 
 
 class WeChatAgentProfileTests(unittest.TestCase):
+    def test_desktop_pane_reloads_profile_with_stale_tmux_environment(self) -> None:
+        source = SUPERVISOR.read_text(encoding="utf-8")
+        function = "desktop_command() {" + source.split("desktop_command() {", 1)[1].split("\n}\n", 1)[0] + "\n}"
+        with tempfile.TemporaryDirectory(prefix="desktop profile's ") as directory:
+            root = Path(directory)
+            launcher = root / "agentic_tools/wechat_gui_agent/scripts/wechat_virtual_desktop.sh"
+            launcher.parent.mkdir(parents=True)
+            launcher.write_text(
+                '#!/bin/bash\nprintf "%s\\n" "$WECHAT_AGENT_HOME" "$WECHAT_AGENT_LOG_DIR" '
+                '"$WECHAT_AGENT_PRIVATE_DIR" "$WECHAT_BINARY" > "$DESKTOP_TEST_CAPTURE.tmp"\n'
+                'mv "$DESKTOP_TEST_CAPTURE.tmp" "$DESKTOP_TEST_CAPTURE"\n',
+                encoding="utf-8",
+            )
+            launcher.chmod(0o700)
+            logs = root / "private logs"
+            logs.mkdir()
+            values = {
+                "WECHAT_AGENT_HOME": str(root / "isolated home"),
+                "WECHAT_AGENT_LOG_DIR": str(logs),
+                "WECHAT_AGENT_PRIVATE_DIR": str(root / "private"),
+                "WECHAT_BINARY": str(root / "private client/wechat"),
+            }
+            env_file = root / "profile.env"
+            env_file.write_text("".join(f"{key}={shlex.quote(value)}\n" for key, value in values.items()), encoding="utf-8")
+            command = subprocess.check_output(
+                ["bash", "-c", function + '\nROOT=$1 PRIVATE_ENV=$2 LOG_DIR=$3 desktop_command',
+                 "bash", str(root), str(env_file), str(logs)], text=True,
+            )
+            capture = root / "captured-profile"
+            # Simulate a long-lived tmux server with none of the profile exports.
+            child = subprocess.Popen(
+                ["bash", "-c", command], start_new_session=True,
+                env={"PATH": os.environ["PATH"], "HOME": str(root / "normal home"),
+                     "DESKTOP_TEST_CAPTURE": str(capture)},
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            try:
+                deadline = time.monotonic() + 5
+                while not capture.exists() and child.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(capture.exists(), (logs / "supervisor-desktop.log").read_text())
+                self.assertEqual(capture.read_text().splitlines(), list(values.values()))
+            finally:
+                if child.poll() is None:
+                    os.killpg(child.pid, signal.SIGTERM)
+                child.wait(timeout=5)
+
     def test_init_creates_private_profile_without_touching_normal_home(self) -> None:
         with tempfile.TemporaryDirectory(prefix="agent-wechat-profile-") as directory:
             normal_home = Path(directory) / "normal-home"

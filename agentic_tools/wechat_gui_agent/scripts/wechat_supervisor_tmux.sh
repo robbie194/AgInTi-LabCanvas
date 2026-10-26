@@ -302,6 +302,12 @@ android_screen_ingress_command() {
   printf ">> %q 2>&1" "$LOG_DIR/supervisor-android-screen-ingress.log"
 }
 
+desktop_command() {
+  # Existing tmux servers may predate the isolated profile environment.
+  printf 'cd %q && { if [[ -f %q ]]; then set -a; source %q || exit; set +a; fi; while true; do agentic_tools/wechat_gui_agent/scripts/wechat_virtual_desktop.sh; sleep 60; done; } >> %q 2>&1' \
+    "$ROOT" "$PRIVATE_ENV" "$PRIVATE_ENV" "$LOG_DIR/supervisor-desktop.log"
+}
+
 ocr_group_command() {
   # tmux starts child panes from the server environment, which may not include
   # the Agent profile's private paths and Cloud registry settings. The runner
@@ -361,8 +367,7 @@ ensure_runtime_windows() {
   if [[ "$TINY11" == "1" ]]; then
     start_missing_window tiny11-store "$(tiny11_store_command)"
   else
-  start_missing_window desktop \
-    "cd '$ROOT' && while true; do agentic_tools/wechat_gui_agent/scripts/wechat_virtual_desktop.sh; sleep 60; done >> '$LOG_DIR/supervisor-desktop.log' 2>&1"
+  start_missing_window desktop "$(desktop_command)"
   if ! pane_start_command_exists "wechat_decrypt_refresh_loop.sh"; then
     tmux split-window -h -t "$SESSION:desktop" \
       "cd '$ROOT' && agentic_tools/wechat_gui_agent/scripts/wechat_restart_loop.sh decrypt-refresh agentic_tools/wechat_gui_agent/scripts/wechat_decrypt_refresh_loop.sh >> '$LOG_DIR/supervisor-decrypt-refresh.log' 2>&1"
@@ -535,8 +540,7 @@ case "$action" in
       ensure_runtime_windows
       exit 0
     fi
-    tmux new-session -d -s "$SESSION" -n desktop \
-      "cd '$ROOT' && while true; do agentic_tools/wechat_gui_agent/scripts/wechat_virtual_desktop.sh; sleep 60; done >> '$LOG_DIR/supervisor-desktop.log' 2>&1"
+    tmux new-session -d -s "$SESSION" -n desktop "$(desktop_command)"
     tmux split-window -h -t "$SESSION:desktop" \
       "cd '$ROOT' && agentic_tools/wechat_gui_agent/scripts/wechat_restart_loop.sh decrypt-refresh agentic_tools/wechat_gui_agent/scripts/wechat_decrypt_refresh_loop.sh >> '$LOG_DIR/supervisor-decrypt-refresh.log' 2>&1"
     IFS=',' read -r -a DIRECT_CONFIGS <<< "$CONFIGS"

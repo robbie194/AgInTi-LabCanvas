@@ -2115,6 +2115,24 @@ Expected signs:
 
 ### Black noVNC Canvas
 
+If the desktop supervisor repeatedly reports permission denied for
+`/opt/overtree-labcanvas/output`, the pane has lost the private profile
+environment; this is a recovery-script failure, not evidence of WeChat logout.
+Desktop commands must source the private supervisor env inside the tmux pane,
+even if its long-lived tmux server predates the profile configuration. Both
+initial startup and missing-window repair use this command to retain
+`WECHAT_AGENT_HOME`, `WECHAT_AGENT_LOG_DIR`, `WECHAT_AGENT_PRIVATE_DIR`, and
+`WECHAT_BINARY`. Do not make the root-owned code tree writable as a workaround.
+To repair an existing faulty loop, respawn only its desktop pane with the
+corrected command, preserving the decrypt pane, monitors, and other accounts.
+Then inspect the actual client window to distinguish login from a missing UI.
+Also check kernel logs for `Out of memory: Killed process ... (wechat)` before
+attributing an absent client to logout or a client crash. A global OOM kill
+means host memory pressure terminated it; it does not by itself prove a WeChat
+memory leak. Recovery may restore a remembered-account login screen that still
+requires the account owner's phone confirmation. Never claim the group route
+is connected based only on a visible login window.
+
 The WeChat desktop is `DISPLAY=:97`, VNC `5917`, and noVNC `6107`. The shared
 Xiaoyunque/JLC browser is a separate `DISPLAY=:98` desktop on noVNC `6099`.
 Do not diagnose one through the other URL.

@@ -147,6 +147,9 @@ the existing client login and exact-title routing checks. See the
 [clipboard instructions](agentic_tools/wechat_gui_agent/README.md).
 If noVNC opens to a black screen, use the
 [virtual desktop startup troubleshooting guide](agentic_tools/wechat_gui_agent/docs/ROBUST_EFFICIENT_OPERATIONS.md#virtual-desktop-startup-troubleshooting).
+Desktop supervisor panes explicitly reload the private profile environment,
+including when reusing an older tmux server, so client recovery keeps the
+isolated writable log paths and configured WeChat binary.
 When Tencent requires a newer Linux WeChat, the Agent can use a private client
 binary through `WECHAT_BINARY`, leaving the normal account's shared install
 unchanged; see the local profile guide above.
