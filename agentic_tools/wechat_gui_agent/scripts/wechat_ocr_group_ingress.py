@@ -24,6 +24,7 @@ import time
 from typing import Any
 
 import wechat_gui_send as gui
+from wechat_ocr_group_config import CHAT_HISTORY_BOTTOM_MARGIN
 from file_lock import fcntl_compat as fcntl
 from wechat_personal_group_cloud import (
     PersonalGroupCloudError,
@@ -443,7 +444,7 @@ def registered_group_configs(
                     "trigger_prefixes": triggers,
                     "artifact_base_url": os.environ.get("WECHAT_PERSONAL_GROUP_ARTIFACT_BASE_URL", "https://cloud.overtree.top"),
                 },
-                "chat_region": {"left": 390, "top": 100, "right": 0, "bottom": 170},
+                "chat_region": {"left": 390, "top": 100, "right": 0, "bottom": CHAT_HISTORY_BOTTOM_MARGIN},
                 "ocr_psm": 11,
                 "group_registration_id": group_id,
                 "binding_status": binding_status,
@@ -662,7 +663,7 @@ def incoming_bubble_candidates(source: Path, window: gui.Window) -> list[dict[st
         image = image.convert("RGB")
         pane = int(ocr_title_crop_regions(window)[0]["left"])
         left, right = pane + 16, pane + 42
-        top, bottom = window.y + 90, window.y + window.height - 170
+        top, bottom = window.y + 90, window.y + window.height - CHAT_HISTORY_BOTTOM_MARGIN
         if left < 0 or right >= image.width or bottom >= image.height:
             return []
         runs = []
@@ -1179,7 +1180,11 @@ def chat_region(window: gui.Window, config: dict[str, Any]) -> dict[str, int]:
     left = max(0, int(raw.get("left", 390)))
     top = max(0, int(raw.get("top", 100)))
     right = max(0, int(raw.get("right", 0)))
-    bottom = max(0, int(raw.get("bottom", 170)))
+    bottom = max(0, int(raw.get("bottom", CHAT_HISTORY_BOTTOM_MARGIN)))
+    # Migrate the previous shipped default, including existing private configs.
+    # It clips the bottom 25 px of history, where a short new question appears.
+    if bottom == 170:
+        bottom = CHAT_HISTORY_BOTTOM_MARGIN
     return {"left": window.x + left, "top": window.y + top, "width": max(100, window.width - left - right), "height": max(100, window.height - top - bottom)}
 
 

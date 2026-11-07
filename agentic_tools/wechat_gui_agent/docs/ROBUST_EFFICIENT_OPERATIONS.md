@@ -2742,3 +2742,25 @@ last 1200 characters so the terminal exception survives long tracebacks; do not
 expose diagnostics or chat content publicly. Existing bounded retries, uncertain
 send handling, exact-target guards, text-only intake and common Cloud artifact
 selection remain unchanged.
+
+## Last-bubble clipping in repeated group turns (2026-11-08)
+
+The compact 908x666 Linux client places the composer 145px above the bottom.
+The previous 170px history exclusion cut through the newest incoming one-line
+question: OCR returned no mention and the task never reached Cloud. Keep the
+history crop, avatar locator, registry configs and config-generator default on
+the same 145px margin. Existing private configs with the old shipped 170px
+value migrate on read; preserve other explicit custom margins. Never include
+composer drafts in the input region. Validate the last avatar and whole text
+line at the real screen coordinates, not only a message in the viewport middle.
+
+Acceptance requires consecutive incoming questions: verify that each is read
+in full and submitted once, the next poll does not replay it, and generated
+media reaches the same group. A clean outbox or a successful greeting alone
+does not establish media delivery.
+
+Production verification recovered the still-visible missed follow-up using
+native Copy, submitted it once, and visibly confirmed both the completed text
+and generated sine-curve image in the originating group. The pending/outbox
+queues drained and the following scan did not submit the question again.
+Keep screenshots and message/state evidence private and outside Git.

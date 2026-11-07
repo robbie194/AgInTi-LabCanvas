@@ -11,6 +11,11 @@ from pathlib import Path
 import re
 
 
+# The compact Linux client's composer starts 145 px above the window bottom.
+# Keep the last incoming bubble above it fully inside the history viewport.
+CHAT_HISTORY_BOTTOM_MARGIN = 145
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--group-name", required=True, help="Exact visible WeChat group title.")
@@ -21,7 +26,7 @@ def main() -> int:
     parser.add_argument("--state-path", type=Path)
     parser.add_argument("--chat-left", type=int, default=390)
     parser.add_argument("--chat-top", type=int, default=100)
-    parser.add_argument("--chat-bottom", type=int, default=170)
+    parser.add_argument("--chat-bottom", type=int, default=CHAT_HISTORY_BOTTOM_MARGIN)
     parser.add_argument("--env-file", type=Path)
     args = parser.parse_args()
     name = args.group_name.strip()

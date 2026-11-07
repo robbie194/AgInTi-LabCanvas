@@ -26,6 +26,70 @@ def load_module():
 
 
 class WeChatOcrGroupIngressTests(unittest.TestCase):
+    def test_real_ocr_reads_followup_above_composer_on_consecutive_frames(self):
+        import shutil
+        from PIL import Image, ImageDraw, ImageFont
+        if not all(shutil.which(tool) for tool in ("convert", "tesseract")):
+            self.skipTest("requires local OCR tools")
+        try:
+            font = ImageFont.truetype("DejaVuSans.ttf", 17)
+        except OSError:
+            self.skipTest("requires a readable test font")
+        module = load_module()
+        window = types.SimpleNamespace(x=0, y=0, width=908, height=666)
+        config = {"chat_region": {"bottom": 170},
+                  "personal_group_cloud": {"trigger_prefixes": ["@OverTree"]}}
+        frames = []
+        questions = ["@OverTree first question", "@OverTree draw a sine curve"]
+        for index in range(2):
+            image = Image.new('RGB', (908, 666), (248, 248, 248))
+            draw = ImageDraw.Draw(image)
+            draw.text((510, 200), questions[0], font=font, fill='black')
+            if index:
+                # Text is entirely below the old history crop ending at y=496.
+                draw.text((510, 498), questions[1], font=font, fill='black')
+            draw.text((510, 560), "@OverTree UNSENT DRAFT", font=font, fill='black')
+            frames.append(image)
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(module.gui, 'screenshot') as screenshot, \
+             mock.patch.object(module, 'visible_media_messages', return_value=[]), \
+             mock.patch.object(module, 'copy_text_bubble',
+                               side_effect=lambda _e, _w, _x, y, **_kw: questions[1 if y > 450 else 0]):
+            for frame, expected in [(frames[0], questions[:1]), (frames[1], questions), (frames[1], questions)]:
+                screenshot.side_effect = lambda _env, path: frame.save(path)
+                result = module.ocr_triggered_message({}, window, config, Path(tmp), all_messages=True)
+                self.assertEqual([item['text'] for item in result['messages']], expected)
+
+    def test_history_includes_entire_latest_bubble_and_excludes_composer(self):
+        module = load_module()
+        window = types.SimpleNamespace(x=502, y=206, width=908, height=666)
+        # Real compact layout: latest bubble ends at y=713; composer starts
+        # at y=727. The previous 170px exclusion stopped at y=702.
+        for config in ({}, {"chat_region": {"bottom": 170}}, {"chat_region": {"bottom": 145}}):
+            region = module.chat_region(window, config)
+            self.assertLessEqual(region["top"], 674)
+            self.assertGreaterEqual(region["top"] + region["height"], 713)
+            self.assertLessEqual(region["top"] + region["height"], 727)
+        self.assertEqual(module.chat_region(window, {"chat_region": {"bottom": 200}})["height"], 366)
+
+    def test_incoming_avatar_at_history_tail_is_not_clipped(self):
+        from PIL import Image, ImageDraw
+        module = load_module()
+        window = types.SimpleNamespace(x=502, y=206, width=908, height=666)
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Image.new('RGB', (1920, 1080), (248, 248, 248))
+            draw = ImageDraw.Draw(image)
+            pane = int(module.ocr_title_crop_regions(window)[0]['left'])
+            draw.rectangle((pane + 16, 662, pane + 48, 697), fill='blue')
+            # Outgoing avatar and a new draft in the composer are not inputs.
+            draw.rectangle((1350, 662, 1385, 697), fill='green')
+            draw.rectangle((pane + 16, 740, pane + 48, 775), fill='red')
+            source = Path(tmp) / 'screen.png'
+            image.save(source)
+            candidates = module.incoming_bubble_candidates(source, window)
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]['top'], 662)
+
     def test_media_menu_requires_native_actions_and_preserves_text_copy(self):
         module = load_module()
         def lines(*labels):
@@ -569,6 +633,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
             config_path = next(private.glob("wechat-group-*-ocr-group.json"))
             self.assertTrue(config_path.exists())
             payload = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["chat_region"]["bottom"], 145)
             self.assertTrue(payload["chatroom_id"].startswith("ocr-title-"))
             self.assertIn(payload["chatroom_id"], env_file.read_text(encoding="utf-8"))
 
