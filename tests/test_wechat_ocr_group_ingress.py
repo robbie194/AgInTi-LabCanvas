@@ -117,17 +117,30 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
             ]}
             with mock.patch.object(module.gui, "require_tools"), \
                  mock.patch.object(module.gui, "wait_for_main_wechat_window", return_value=window), \
+                 mock.patch.object(module.gui, "assert_no_blocking_wechat_dialog") as dialog_guard, \
                  mock.patch.object(module, "has_unread_badge", return_value=False), \
                  mock.patch.object(module.gui, "open_target", return_value={"ok": True}) as open_target, \
                  mock.patch.object(module, "ocr_triggered_message", return_value=batch), \
                  mock.patch.object(module, "run_cloud_once", side_effect=lambda _c, s, _r, **_kw: {"state": s, "metrics": {}}) as cloud:
+                dialog_guard.side_effect = RuntimeError("WECHAT_GUI_DIALOG_BLOCKED: hidden confirmation")
+                blocked = module.scan_group(args, config, Path(tmp) / "config.json")
+                self.assertFalse(blocked["ok"])
+                self.assertEqual(blocked["method"], "dialog_blocked")
+                self.assertEqual(cloud.call_args.args[2], [])
+                dialog_guard.side_effect = None
+                with mock.patch.object(module, "ocr_triggered_message", return_value={
+                    "method": "visible_batch", "messages": [], "copy_failed_count": 1,
+                }):
+                    failed_copy = module.scan_group(args, config, Path(tmp) / "config.json")
+                self.assertFalse(failed_copy["ok"])
+                self.assertEqual(failed_copy["copy_failed_count"], 1)
                 first = module.scan_group(args, config, Path(tmp) / "config.json")
                 second = module.scan_group(args, config, Path(tmp) / "config.json")
             self.assertEqual(first["queued_count"], 2)
             self.assertEqual(second["queued_count"], 0)
-            self.assertEqual([r["content"] for r in cloud.call_args_list[0].args[2]],
+            self.assertEqual([r["content"] for r in cloud.call_args_list[2].args[2]],
                              ["@OverTree 第一问", "@OverTree 第二问"])
-            self.assertEqual(cloud.call_args_list[1].args[2], [])
+            self.assertEqual(cloud.call_args_list[3].args[2], [])
             self.assertTrue(open_target.call_args.kwargs["prefer_current"])
             self.assertFalse(open_target.call_args.kwargs["allow_search"])
             saved = module.load_state(Path(tmp) / "OverTree-ABCD-ocr.state.json")
@@ -451,7 +464,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         finally:
             module.time.time = original_time
 
-    def test_triggered_text_uses_latest_addressed_line_only(self):
+    def test_failed_native_copy_does_not_submit_an_ocr_fragment(self):
         module = load_module()
         lines = [
             {"text": "@OverTree 旧问题", "top": 10},
@@ -469,7 +482,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
                 {"personal_group_cloud": {"trigger_prefixes": ["@OverTree"]}},
                 Path(tmp),
             )
-        self.assertEqual(result, "@OverTree 新问题")
+        self.assertEqual(result, "")
 
     def test_ocr_header_crop_includes_titles_in_narrow_wechat_window(self):
         module = load_module()
@@ -904,6 +917,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
 
             with mock.patch.object(module.gui, "require_tools"), \
                  mock.patch.object(module.gui, "wait_for_main_wechat_window", return_value=window), \
+                 mock.patch.object(module.gui, "assert_no_blocking_wechat_dialog"), \
                  mock.patch.object(module, "has_unread_badge", return_value=False), \
                  mock.patch.object(module.gui, "open_target", return_value={"ok": True}), \
                  mock.patch.object(module, "ocr_triggered_message", return_value={
@@ -960,6 +974,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {}, clear=True), \
                  mock.patch.object(module.gui, "require_tools"), \
                  mock.patch.object(module.gui, "wait_for_main_wechat_window", return_value=window), \
+                 mock.patch.object(module.gui, "assert_no_blocking_wechat_dialog"), \
                  mock.patch.object(module, "has_unread_badge", return_value=True), \
                  mock.patch.object(module.gui, "open_target", side_effect=reject_opened_target) as open_target, \
                  mock.patch.object(module, "ocr_triggered_message") as extract_message, \
@@ -998,6 +1013,7 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
             window = type("Window", (), {"x": 0, "y": 0, "width": 916, "height": 700})()
             with mock.patch.object(module.gui, "require_tools"), \
                  mock.patch.object(module.gui, "wait_for_main_wechat_window", return_value=window), \
+                 mock.patch.object(module.gui, "assert_no_blocking_wechat_dialog"), \
                  mock.patch.object(module, "has_unread_badge", return_value=False), \
                  mock.patch.object(module.gui, "open_target") as open_target, \
                  mock.patch.object(module, "ocr_triggered_message") as extract, \

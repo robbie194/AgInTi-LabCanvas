@@ -1072,6 +1072,7 @@ class WeChatGuiSendTests(unittest.TestCase):
 
     def test_relaxed_title_guard_does_not_allow_live_send_by_default(self):
         module = load_wechat_gui_send()
+        module.reset_wechat_send_surface = mock.Mock()
         original_focus = module.focus
         original_screenshot = module.screenshot
         original_open_target = module.open_target
@@ -1120,6 +1121,7 @@ class WeChatGuiSendTests(unittest.TestCase):
 
     def test_relaxed_title_guard_still_allows_dry_open_review(self):
         module = load_wechat_gui_send()
+        module.reset_wechat_send_surface = mock.Mock()
         original_focus = module.focus
         original_screenshot = module.screenshot
         original_open_target = module.open_target
@@ -1180,7 +1182,7 @@ class WeChatGuiSendTests(unittest.TestCase):
             module.time.sleep = original_sleep
 
         self.assertEqual(calls[0], ("click", 670, 640))
-        self.assertIn(("key", "Escape"), calls)
+        self.assertNotIn(("key", "Escape"), calls)
         self.assertIn(("hotkey", "ctrl+a"), calls)
         self.assertIn(("key", "BackSpace"), calls)
         self.assertIn(("key", "Delete"), calls)
@@ -2274,6 +2276,8 @@ class WeChatGuiSendTests(unittest.TestCase):
                 "dismiss_internal_file_transfer_surface",
                 side_effect=lambda *_args: calls.append("dismiss"),
             ),
+            mock.patch.object(module, "click", side_effect=lambda *_args: calls.append("click")),
+            mock.patch.object(module, "assert_no_blocking_wechat_dialog"),
             mock.patch.object(module.time, "sleep"),
         ):
             module.reset_wechat_send_surface(
@@ -2285,8 +2289,30 @@ class WeChatGuiSendTests(unittest.TestCase):
 
         self.assertEqual(
             calls,
-            ["close", "focus", "Escape", "Escape", "dismiss", "close", "focus"],
+            ["close", "focus", "click", "dismiss", "close", "focus"],
         )
+
+    def test_composer_cleanup_never_invokes_logout_shortcut(self):
+        module = load_wechat_gui_send()
+        with mock.patch.object(module, "click"), \
+             mock.patch.object(module, "key") as key, \
+             mock.patch.object(module, "hotkey") as hotkey, \
+             mock.patch.object(module.time, "sleep"):
+            module.clear_composer({}, module.Window("main", 0, 0, 908, 666), 0.1)
+        self.assertNotIn(mock.call({}, "Escape"), key.call_args_list)
+        hotkey.assert_called_once_with({}, "ctrl+a")
+        self.assertEqual([call.args[1] for call in key.call_args_list], ["BackSpace", "Delete"])
+
+    def test_hidden_owned_dialog_blocks_chat_even_with_readable_header(self):
+        module = load_wechat_gui_send()
+        main = module.Window("42", 0, 0, 908, 666)
+        hidden = module.WindowIdentity("43", "wechat", "wechat wechat", "42")
+        unrelated = module.WindowIdentity("44", "wechat", "wechat wechat", "99")
+        with mock.patch.object(module, "visible_window_identities", return_value=[unrelated]):
+            module.assert_no_blocking_wechat_dialog({}, main)
+        with mock.patch.object(module, "visible_window_identities", return_value=[hidden]):
+            with self.assertRaisesRegex(RuntimeError, "WECHAT_GUI_DIALOG_BLOCKED"):
+                module.assert_no_blocking_wechat_dialog({}, main)
 
     def test_dismiss_internal_file_transfer_surface_uses_bounded_close_control(self):
         module = load_wechat_gui_send()

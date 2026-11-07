@@ -171,7 +171,6 @@ def main() -> int:
     )
     if not window:
         raise SystemExit(f"No visible WeChat window found on DISPLAY={args.display}. Log in first.")
-    close_secondary_wechat_windows(env, window)
     if window.width < 500 or window.height < 500:
         screenshot(env, args.output_dir / "login_or_small_window.png")
         raise SystemExit(
@@ -184,6 +183,7 @@ def main() -> int:
     results = []
     with lock_path.open("w", encoding="utf-8") as lock:
         acquire_gui_send_lock(lock, timeout_seconds=lock_wait_seconds)
+        close_secondary_wechat_windows(env, window)
         for index, target in enumerate(targets, start=1):
             result = send_one(
                 env,
@@ -1348,7 +1348,9 @@ def clear_composer(env: dict[str, str], window: Window, pause: float) -> None:
     # right pane so it does not send from the search box.
     click(env, window.x + int(window.width * 0.66), window.y + window.height - 80)
     time.sleep(pause)
-    for key_name in ("Escape", "Escape", "ctrl+a", "BackSpace", "Delete"):
+    # Escape is a session action in Linux WeChat: even from the composer it
+    # can open the logout confirmation. Never use it as generic cleanup.
+    for key_name in ("ctrl+a", "BackSpace", "Delete"):
         if "+" in key_name:
             hotkey(env, key_name)
         else:
@@ -2422,15 +2424,25 @@ def reset_wechat_send_surface(
     """Dismiss stale previews/transfers before clicking the guarded chat list."""
     close_non_target_wechat_windows(env, main, target)
     focus(env, main)
-    for _ in range(2):
-        try:
-            key(env, "Escape")
-        except RuntimeError:
-            break
-        time.sleep(max(0.1, min(pause, 0.3)))
+    # Dismiss transient menus with a neutral header click. Escape can create
+    # a modal logout prompt which a subsequent windowraise hides behind main.
+    click(env, main.x + main.width - 180, main.y + 58)
     dismiss_internal_file_transfer_surface(env, main, target, pause)
     close_non_target_wechat_windows(env, main, target)
     focus(env, main)
+    assert_no_blocking_wechat_dialog(env, main)
+
+
+def assert_no_blocking_wechat_dialog(env: dict[str, str], main: Window) -> None:
+    """A readable header does not prove the underlying chat accepts input."""
+    for child in visible_window_identities(env):
+        if child.transient_for != main.wid or "wechat" not in child.window_class.casefold().split():
+            continue
+        if child.title.casefold().strip() == "wechat" or is_verified_file_chooser(child, main):
+            raise RuntimeError(
+                "WECHAT_GUI_DIALOG_BLOCKED: an owned dialog is blocking the chat "
+                f"(window={child.wid}, title={child.title!r}); cancel it before retrying"
+            )
 
 
 def internal_file_transfer_surface_visible(env: dict[str, str], main: Window) -> bool:

@@ -8551,7 +8551,8 @@ def send_gui_message(config: dict[str, Any], message: str) -> str:
                 and desktop_message_can_fallback_to_android(exc)
             ):
                 return send_android_message_once(config, message)
-            errors.append(f"attempt {attempt}: {truncate_text(str(exc), 1200)}")
+            # Python tracebacks put the actionable exception at the end.
+            errors.append(f"attempt {attempt}: {str(exc)[-1200:]}")
             if is_deferable_send_error(exc):
                 break
             if attempt < attempts and delay:

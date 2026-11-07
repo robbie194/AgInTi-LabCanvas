@@ -496,6 +496,7 @@ def scan_group(
     rows: list[dict[str, Any]] = []
     fingerprint = ""
     seeded = False
+    copy_failed_count = 0
     if scan_gui:
         with tempfile.TemporaryDirectory(prefix="wechat-ocr-") as temp:
             evidence = Path(temp)
@@ -519,6 +520,7 @@ def scan_group(
                     original_title_regions = gui.title_crop_regions
                     gui.title_crop_regions = ocr_title_crop_regions
                     try:
+                        gui.assert_no_blocking_wechat_dialog(env, window)
                         opened_result = gui.open_target(
                             env, window, target, pause=float(config.get("open_pause_seconds") or 0.6),
                             out_dir=evidence, shot_prefix="ocr-open", skip_title_guard=False,
@@ -527,12 +529,19 @@ def scan_group(
                             prefer_current=True, allow_search=False,
                             fail_closed_after_visible_match=True,
                         )
+                    except RuntimeError as exc:
+                        if "WECHAT_GUI_DIALOG_BLOCKED" not in str(exc):
+                            raise
+                        # Reconcile Cloud/results even while desktop input is
+                        # blocked, and continue servicing the other groups.
+                        opened_result = {"ok": False, "method": "dialog_blocked", "error": str(exc)}
                     finally:
                         gui.title_crop_regions = original_title_regions
                     if not opened_result.get("ok"):
                         title_failure = {
                             "status": "title_guard_failed",
                             "method": opened_result.get("method"), "window_title": opened_result.get("window_title"),
+                            **({"error": opened_result["error"]} if opened_result.get("error") else {}),
                         }
                         extraction_method = "title_guard_failed"
                     else:
@@ -546,6 +555,7 @@ def scan_group(
                         state["ocr_bubble_kind_cache"] = config.get("_ocr_bubble_kind_cache", {})
                         messages = extraction.get("messages", [extraction])
                         extraction_method = str(extraction.get("method") or "none")
+                        copy_failed_count = int(extraction.get("copy_failed_count") or 0)
             else:
                 extraction_method = "no_unread_badge"
         for message in messages:
@@ -592,11 +602,12 @@ def scan_group(
         state["ocr_last_scan_method"] = extraction_method
         state["ocr_last_detected_count"] = len(messages)
         state["ocr_last_queued_count"] = len(rows)
+        state["ocr_last_copy_failed_count"] = copy_failed_count
     save_state(state_path, state)
     metrics = result.get("metrics") or {}
     delivery_error = str(metrics.get("send_error") or "")
     return {
-        "ok": not bool(delivery_error or title_failure),
+        "ok": not bool(delivery_error or title_failure or copy_failed_count),
         "chat": chat_name,
         "opened": opened,
         "text_detected": bool(messages),
@@ -604,6 +615,7 @@ def scan_group(
         "seeded": seeded,
         "detected_count": len(messages),
         "queued_count": len(rows),
+        "copy_failed_count": copy_failed_count,
         "submitted": bool(result.get("task_enqueued")),
         "response_sent": bool(result.get("response_sent")),
         "metrics": metrics,
@@ -835,6 +847,7 @@ def ocr_triggered_message(
     if prefer_binding_code and binding_code and not all_messages:
         return {"text": binding_code, "method": "ocr_binding_code"}
     messages: list[dict[str, Any]] = list(media_messages)
+    copy_failures = 0
     seen_text: set[str] = set()
     selected_lines = lines if all_messages else list(reversed(lines))
     if all_messages and prefer_binding_code and binding_code:
@@ -861,7 +874,13 @@ def ocr_triggered_message(
                     continue
                 message = {"text": normalized[:30_000], "method": "native_copy"}
             else:
-                message = {"text": normalize_message_text(text)[:30_000], "method": "ocr_fallback"}
+                # OCR locates a bubble; one line is not the whole question.
+                # Keep failed copies unread so a later scan can retry instead
+                # of submitting truncated text and permanently deduplicating it.
+                copy_failures += 1
+                if not all_messages:
+                    return {"text": "", "method": "native_copy_failed"}
+                continue
         else:
             if line is not binding_line:
                 continue
@@ -872,7 +891,8 @@ def ocr_triggered_message(
             seen_text.add(message["text"])
             messages.append(message)
     if all_messages:
-        return {"text": "", "method": "visible_batch", "messages": messages}
+        return {"text": "", "method": "visible_batch", "messages": messages,
+                **({"copy_failed_count": copy_failures} if copy_failures else {})}
     return {"text": "", "method": "none"}
 
 

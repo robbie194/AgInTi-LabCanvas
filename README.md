@@ -136,8 +136,9 @@ acceptance guide](docs/WECHAT_PERSONAL_GROUP_LOCAL_PROFILE.md).
 When reloaded, the OCR monitor uses a quantized local screenshot signature to
 skip unchanged screens, then uses OCR to locate a triggered bubble and the
 nearby magnified native Copy menu plus the isolated X clipboard to read its
-full text. OCR stays as a bounded fallback; Cloud task/result polling continues
-while the GUI is idle.
+full text. Addressed questions require a successful native Copy: a failed copy
+stays unread for a later scan instead of forwarding a truncated OCR line.
+Cloud task/result polling continues while the GUI is idle or blocked.
 The guide includes a loopback-only SSH tunnel and `wechat_agent_profile.sh
 add-group`, which creates one private state/config per exact group.
 The WeChat preview (`http://127.0.0.1:6108/`) includes an explicit UTF-8
@@ -154,6 +155,11 @@ Native file delivery explicitly focuses the verified chooser before pasting
 its path on the window-manager-free desktop. Selection failures cancel only
 the exact WeChat-owned chooser through its normal close protocol so it cannot
 obstruct subsequent messages.
+Sender cleanup never presses Escape on the main chat: current Linux WeChat
+can open a logout confirmation which is then hidden behind the main window.
+Both ingress and delivery detect such owned dialogs before trusting a visible
+chat header. Private delivery errors retain the terminal exception rather
+than just the start of a traceback.
 When Tencent requires a newer Linux WeChat, the Agent can use a private client
 binary through `WECHAT_BINARY`, leaving the normal account's shared install
 unchanged; see the local profile guide above.

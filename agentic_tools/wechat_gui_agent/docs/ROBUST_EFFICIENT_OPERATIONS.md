@@ -2713,3 +2713,32 @@ bounded menu classifications/fingerprints, seed old visible history on restart,
 and never inspect outgoing bubbles as incoming media. Unknown/invisible bubbles
 may remain unread: this GUI path cannot promise the completeness of an official
 typed-message API. No media source lookup or agent fallback is allowed.
+
+## Hidden logout confirmation and complete-text intake (2026-11-07)
+
+Do not press Escape to reset the main chat or clear its composer. Current Linux
+WeChat can open a logout confirmation even from the composer; raising the main
+window hides it without releasing the modal input block. A readable header and
+a live process therefore do not prove chat readiness. Use the neutral header
+and composer selection/deletion for cleanup. Close auxiliary windows only via
+the existing owned-window normal close protocol under the shared GUI lock;
+startup cleanup must acquire that lock too. Ingress and sender preflight reject
+remaining owned generic dialogs/file choosers with `WECHAT_GUI_DIALOG_BLOCKED`.
+Continue Cloud/outbox reconciliation while inbound navigation is blocked.
+
+For a live incident, raise the verified same-client transient, inspect it, and
+explicitly cancel a logout confirmation; never confirm logout, destroy the
+window's X resource, or restart the client just to clear it. After cancellation,
+verify complete native Copy and attachment staging independently. Staging is
+not verified delivery: do not claim an end-to-end acceptance without a current
+authorized incoming task and evidence of its returned text/media.
+
+OCR locates addressed questions but must not supply their content. Failed
+native copies return no question, increment `copy_failed_count`, and are not
+added to the durable seen list, allowing a later scan to retry. Old abandoned
+tasks must not be replayed after a repair; preserve deduplication when migrating
+from truncated OCR content to complete native text. Keep private send errors'
+last 1200 characters so the terminal exception survives long tracebacks; do not
+expose diagnostics or chat content publicly. Existing bounded retries, uncertain
+send handling, exact-target guards, text-only intake and common Cloud artifact
+selection remain unchanged.

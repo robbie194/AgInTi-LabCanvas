@@ -436,7 +436,7 @@ def _abandon_outbox_item(config: dict[str, Any], state: dict[str, Any], item: di
         "resultId": str(item.get("resultId") or ""),
         "attempts": attempts,
         "reason": reason,
-        "error": str(error or "")[:300],
+        "error": str(error or "")[-1200:],
         "abandonedAt": int(now),
     })
     del failures[:-20]
@@ -511,7 +511,7 @@ def _flush_outbox(config: dict[str, Any], state: dict[str, Any], send_text: Call
             return None, None
         attempts = int(item.get("attempts") or 0) + 1
         item["attempts"] = attempts
-        item["lastError"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+        item["lastError"] = f"{type(exc).__name__}: {str(exc)[-1200:]}"
         if config.get("ingress") == "ocr_gui" and "WECHAT_GUI_SEND_UNCERTAIN" in str(exc):
             item["deliveryUncertain"] = True
         item.pop("sendingAt", None)
@@ -528,7 +528,7 @@ def _flush_outbox(config: dict[str, Any], state: dict[str, Any], send_text: Call
     except Exception as exc:
         attempts = int(item.get("attempts") or 0) + 1
         item["attempts"] = attempts
-        item["lastError"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+        item["lastError"] = f"{type(exc).__name__}: {str(exc)[-1200:]}"
         if config.get("ingress") == "ocr_gui" and "WECHAT_GUI_SEND_UNCERTAIN" in str(exc):
             item["deliveryUncertain"] = True
         item.pop("sendingAt", None)

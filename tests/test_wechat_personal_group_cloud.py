@@ -608,6 +608,15 @@ class PersonalGroupCloudTests(unittest.TestCase):
         self.assertEqual((sent, error), ("result", None))
         self.assertEqual(sender.call_count, 1)
 
+    def test_delivery_error_preserves_terminal_exception_from_long_traceback(self):
+        state = {"personal_group_cloud_outbox": [{"id": "ack", "kind": "ack", "text": "received"}]}
+        terminal = "RuntimeError: WECHAT_GUI_DIALOG_BLOCKED: cancel the owned dialog"
+        sender = mock.Mock(side_effect=RuntimeError("Traceback:\n" + "stack frame\n" * 100 + terminal))
+        sent, error = bridge._flush_outbox(self.config(), state, sender, 100)
+        self.assertIsNone(sent)
+        self.assertIn(terminal, error)
+        self.assertIn(terminal, state["personal_group_cloud_outbox"][0]["lastError"])
+
     def test_exhausted_legacy_ack_is_discarded_before_its_future_backoff_and_results_continue(self):
         state = {"personal_group_cloud_outbox": [{
             "id": "ack-old",
