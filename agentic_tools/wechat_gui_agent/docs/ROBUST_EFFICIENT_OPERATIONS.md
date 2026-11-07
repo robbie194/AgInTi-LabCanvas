@@ -2115,6 +2115,15 @@ Expected signs:
 
 ### Black noVNC Canvas
 
+A visible `Select File` window alongside an otherwise logged-in chat is a
+native attachment picker, not a login failure. On Xvfb, discovering that window
+does not grant it keyboard focus. Before typing a local path, recheck the
+chooser identity, explicitly focus/raise it, and verify keyboard focus. On a
+selection exception, cancel only the same verified WeChat child with the exact
+main-window transient parent using its normal `WM_DELETE_WINDOW` protocol;
+preserve the original error and never press Return or send a draft as cleanup.
+Do not replay abandoned deliveries merely because the picker was dismissed.
+
 If the desktop supervisor repeatedly reports permission denied for
 `/opt/overtree-labcanvas/output`, the pane has lost the private profile
 environment; this is a recovery-script failure, not evidence of WeChat logout.

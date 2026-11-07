@@ -635,9 +635,18 @@ def send_file_to_open_chat(
     )
     time.sleep(max(0.5, pause))
     chooser = wait_for_verified_file_chooser(env, window)
-    paste_path_into_file_chooser(env, path)
-    time.sleep(max(0.5, pause))
-    wait_for_wechat_focus_after_picker(env, window)
+    try:
+        paste_path_into_file_chooser(env, path, chooser=chooser, wechat_window=window)
+        time.sleep(max(0.5, pause))
+        wait_for_wechat_focus_after_picker(env, window)
+    except Exception:
+        # Selection failures must not leave a native modal blocking later work.
+        # Cleanup is best effort and must preserve the original send error.
+        try:
+            dismiss_owned_file_chooser(env, window, chooser)
+        except Exception:
+            pass
+        raise
 
     selected_path = out_dir / f"{shot_prefix}-file-selected.png"
     screenshot(env, selected_path)
@@ -830,7 +839,48 @@ def wait_for_wechat_focus_after_picker(
     )
 
 
-def paste_path_into_file_chooser(env: dict[str, str], path: Path) -> None:
+def focus_verified_file_chooser(
+    env: dict[str, str], wechat_window: Window, chooser: WindowIdentity,
+) -> None:
+    current = read_window_identity(env, chooser.wid)
+    if current != chooser or not is_verified_file_chooser(current, wechat_window):
+        raise RuntimeError("WECHAT_FILE_CHOOSER_CHANGED: refusing to paste into a changed window")
+    # Xvfb has no window manager. A visible chooser need not own keyboard focus.
+    focus(env, Window(chooser.wid, 0, 0, 0, 0))
+    active = active_window_identity(env)
+    if active is None or active.wid != chooser.wid:
+        raise RuntimeError("WECHAT_FILE_CHOOSER_NOT_FOCUSED: refusing to paste into another window")
+
+
+def dismiss_owned_file_chooser(
+    env: dict[str, str], wechat_window: Window, chooser: WindowIdentity,
+) -> None:
+    current = read_window_identity(env, chooser.wid)
+    try:
+        parent = str(int(wechat_window.wid, 0 if wechat_window.wid.startswith("0x") else 10))
+    except ValueError:
+        parent = wechat_window.wid
+    if (current != chooser or current.transient_for != parent
+            or "wechat" not in current.window_class.casefold().split()
+            or not is_verified_file_chooser(current, wechat_window)):
+        return
+    result = request_close(
+        chooser.wid,
+        display_name=env.get("DISPLAY", ":97"),
+        protected_window_ids={wechat_window.wid},
+    )
+    if not result.get("ok"):
+        raise RuntimeError(
+            "WECHAT_FILE_CHOOSER_CLOSE_FAILED: "
+            f"verified picker close request failed ({result.get('status', 'unknown')})"
+        )
+    wait_for_wechat_focus_after_picker(env, wechat_window)
+
+
+def paste_path_into_file_chooser(
+    env: dict[str, str], path: Path, *, chooser: WindowIdentity, wechat_window: Window,
+) -> None:
+    focus_verified_file_chooser(env, wechat_window, chooser)
     hotkey(env, "ctrl+l")
     time.sleep(0.2)
     paste_text(env, str(path))

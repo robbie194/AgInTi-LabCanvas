@@ -150,6 +150,10 @@ If noVNC opens to a black screen, use the
 Desktop supervisor panes explicitly reload the private profile environment,
 including when reusing an older tmux server, so client recovery keeps the
 isolated writable log paths and configured WeChat binary.
+Native file delivery explicitly focuses the verified chooser before pasting
+its path on the window-manager-free desktop. Selection failures cancel only
+the exact WeChat-owned chooser through its normal close protocol so it cannot
+obstruct subsequent messages.
 When Tencent requires a newer Linux WeChat, the Agent can use a private client
 binary through `WECHAT_BINARY`, leaving the normal account's shared install
 unchanged; see the local profile guide above.

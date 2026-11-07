@@ -414,6 +414,79 @@ class WeChatGuiSendTests(unittest.TestCase):
             )
         )
 
+    def test_picker_focus_precedes_path_paste_without_window_manager(self):
+        module = load_wechat_gui_send()
+        main = module.Window("100", 0, 0, 1000, 700)
+        chooser = module.WindowIdentity("200", "Select File", "wechat wechat", "100")
+        calls = []
+        with (
+            mock.patch.object(module, "read_window_identity", return_value=chooser),
+            mock.patch.object(module, "active_window_identity", return_value=chooser),
+            mock.patch.object(module, "focus", side_effect=lambda *_: calls.append("focus")),
+            mock.patch.object(module, "hotkey", side_effect=lambda *_: calls.append("location")),
+            mock.patch.object(module, "paste_text", side_effect=lambda *_: calls.append("paste")),
+            mock.patch.object(module, "key", side_effect=lambda *_: calls.append("select")),
+            mock.patch.object(module.time, "sleep"),
+        ):
+            module.paste_path_into_file_chooser({}, Path("/tmp/report.pdf"), chooser=chooser, wechat_window=main)
+        self.assertEqual(calls, ["focus", "location", "paste", "select"])
+
+    def test_picker_focus_failure_does_not_paste_or_submit(self):
+        module = load_wechat_gui_send()
+        main = module.Window("100", 0, 0, 1000, 700)
+        chooser = module.WindowIdentity("200", "Select File", "wechat wechat", "100")
+        with (
+            mock.patch.object(module, "read_window_identity", return_value=chooser),
+            mock.patch.object(module, "active_window_identity", return_value=module.WindowIdentity("100", "Weixin", "wechat")),
+            mock.patch.object(module, "focus"),
+            mock.patch.object(module, "paste_text") as paste,
+            mock.patch.object(module, "key") as key,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "CHOOSER_NOT_FOCUSED"):
+                module.paste_path_into_file_chooser({}, Path("/tmp/report.pdf"), chooser=chooser, wechat_window=main)
+        paste.assert_not_called()
+        key.assert_not_called()
+
+    def test_picker_cleanup_only_cancels_exact_wechat_child(self):
+        module = load_wechat_gui_send()
+        main = module.Window("100", 0, 0, 1000, 700)
+        for parent, expected in (("100", True), ("999", False)):
+            chooser = module.WindowIdentity("200", "Select File", "wechat wechat", parent)
+            with (
+                mock.patch.object(module, "read_window_identity", return_value=chooser),
+                mock.patch.object(module, "wait_for_wechat_focus_after_picker"),
+                mock.patch.object(module, "request_close", return_value={"ok": True}) as request_close,
+            ):
+                module.dismiss_owned_file_chooser({}, main, chooser)
+                self.assertEqual(request_close.call_count, 1 if expected else 0)
+                if expected:
+                    request_close.assert_called_once_with(
+                        "200", display_name=":97", protected_window_ids={"100"},
+                    )
+
+    def test_selection_error_cleans_picker_and_preserves_original_error(self):
+        module = load_wechat_gui_send()
+        main = module.Window("100", 0, 0, 1000, 700)
+        chooser = module.WindowIdentity("200", "Select File", "wechat wechat", "100")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            file = root / "report.pdf"
+            file.write_bytes(b"pdf")
+            with (
+                mock.patch.object(module, "focus"),
+                mock.patch.object(module, "screenshot"),
+                mock.patch.object(module, "raise_if_wechat_locked"),
+                mock.patch.object(module, "clear_composer"),
+                mock.patch.object(module, "click"),
+                mock.patch.object(module.time, "sleep"),
+                mock.patch.object(module, "wait_for_verified_file_chooser", return_value=chooser),
+                mock.patch.object(module, "paste_path_into_file_chooser", side_effect=RuntimeError("paste failed")),
+                mock.patch.object(module, "dismiss_owned_file_chooser", side_effect=RuntimeError("cleanup failed")) as cleanup,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "paste failed"):
+                    module.send_file_to_open_chat({}, main, module.TargetSpec("test", "test", "test"), file, root, "probe", pause=0.1)
+            cleanup.assert_called_once_with({}, main, chooser)
+
     def test_file_chooser_wait_scans_visible_windows_without_window_manager(self):
         module = load_wechat_gui_send()
         main = module.Window("main", 0, 0, 1000, 700)
