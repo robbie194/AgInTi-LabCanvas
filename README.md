@@ -141,6 +141,9 @@ stays unread for a later scan instead of forwarding a truncated OCR line.
 The history crop includes the final bubble directly above the compact Linux
 composer; existing configs using the old 170px bottom margin are migrated to
 145px so a short follow-up question is not clipped out of intake.
+When OCR separates the `@` glyph from `OverTree`, the name may locate a
+candidate bubble, but only native WeChat Copy confirming the exact mention
+allows the message into Cloud.
 Cloud task/result polling continues while the GUI is idle or blocked.
 The guide includes a loopback-only SSH tunnel and `wechat_agent_profile.sh
 add-group`, which creates one private state/config per exact group.

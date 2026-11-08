@@ -858,7 +858,7 @@ def ocr_triggered_message(
         selected_lines = lines[code_index:]
     for line in selected_lines:
         text = line["text"]
-        if any(prefix.casefold() in text.casefold() for prefix in prefixes):
+        if ocr_line_may_locate_trigger(text, prefixes):
             copied = ""
             point = ocr_line_screen_point(line, region, scale=1.6)
             copy_enabled = str(os.environ.get("WECHAT_OCR_GROUP_NATIVE_COPY", "true")).lower() != "false"
@@ -1434,6 +1434,21 @@ def normalize_message_text(text: str) -> str:
     while lines and not lines[-1]:
         lines.pop()
     return "\n".join(lines)
+
+
+def ocr_line_may_locate_trigger(text: str, prefixes: list[str]) -> bool:
+    """Allow OCR to locate a split @mention; native Copy remains authoritative."""
+    folded = str(text or "").casefold()
+    for prefix in prefixes:
+        marker = str(prefix or "").strip()
+        if not marker:
+            continue
+        if marker.casefold() in folded:
+            return True
+        name = marker.lstrip("@＠").casefold()
+        if name and re.search(rf"(?<![a-z0-9_]){re.escape(name)}(?![a-z0-9_])", folded):
+            return True
+    return False
 
 
 def looks_like_ocr_debug_text(text: str) -> bool:

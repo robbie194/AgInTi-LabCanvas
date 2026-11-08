@@ -375,6 +375,47 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
             {"DISPLAY": ":97"}, window, 265, 111, evidence=Path(tmp)
         )
 
+    def test_split_ocr_mention_uses_native_copy_to_confirm_exact_trigger(self):
+        module = load_module()
+        lines = [
+            {"text": "@", "left": 100, "top": 100, "right": 110, "bottom": 120},
+            {"text": "OverTree 你再帮我画一个二维sin函数曲线图", "left": 112, "top": 100,
+             "right": 420, "bottom": 124},
+        ]
+        exact = "@OverTree 你再帮我画一个二维sin函数曲线图"
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(module.gui, "screenshot"), \
+             mock.patch.object(module, "run_command", return_value=types.SimpleNamespace(stdout="")), \
+             mock.patch.object(module, "parse_ocr_lines", return_value=lines), \
+             mock.patch.object(module, "visible_media_messages", return_value=[]), \
+             mock.patch.object(module, "copy_text_bubble", return_value=exact) as copy:
+            result = module.ocr_triggered_message(
+                {}, types.SimpleNamespace(x=0, y=0, width=916, height=700),
+                {"personal_group_cloud": {"trigger_prefixes": ["@OverTree"]}},
+                Path(tmp), all_messages=True,
+            )
+        self.assertEqual([item["text"] for item in result["messages"]], [exact])
+        copy.assert_called_once()
+
+        copy.return_value = "OverTree 这只是普通文字，并没有@提及"
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(module.gui, "screenshot"), \
+             mock.patch.object(module, "run_command", return_value=types.SimpleNamespace(stdout="")), \
+             mock.patch.object(module, "parse_ocr_lines", return_value=lines), \
+             mock.patch.object(module, "visible_media_messages", return_value=[]):
+            result = module.ocr_triggered_message(
+                {}, types.SimpleNamespace(x=0, y=0, width=916, height=700),
+                {"personal_group_cloud": {"trigger_prefixes": ["@OverTree"]}},
+                Path(tmp), all_messages=True,
+            )
+        self.assertEqual(result["messages"], [])
+
+    def test_trigger_locator_accepts_split_name_but_respects_word_boundaries(self):
+        module = load_module()
+        self.assertTrue(module.ocr_line_may_locate_trigger("OverTree 你再帮我画图", ["@OverTree"]))
+        self.assertTrue(module.ocr_line_may_locate_trigger("@OverTree 画图", ["@OverTree"]))
+        self.assertFalse(module.ocr_line_may_locate_trigger("OverTreeAI 画图", ["@OverTree"]))
+
     def test_ocr_trigger_rejects_native_copy_tesseract_dump(self):
         module = load_module()
         tsv = """level\tpage_num\tblock_num\tpar_num\tline_num\tleft\ttop\twidth\theight\tconf\ttext

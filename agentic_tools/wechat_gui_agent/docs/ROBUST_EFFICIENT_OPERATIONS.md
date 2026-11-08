@@ -2764,3 +2764,9 @@ native Copy, submitted it once, and visibly confirmed both the completed text
 and generated sine-curve image in the originating group. The pending/outbox
 queues drained and the following scan did not submit the question again.
 Keep screenshots and message/state evidence private and outside Git.
+
+On later turns, Tesseract split the leading `@` glyph into a separate OCR line
+from `OverTree`, so the literal prefix check missed a visible mention. Permit
+the bot name alone to locate a candidate line, but always require native Copy
+of that exact bubble to contain the configured literal `@OverTree` prefix
+before accepting it. Plain text mentioning the bot name must remain inert.
