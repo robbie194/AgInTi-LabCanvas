@@ -2123,6 +2123,14 @@ selection exception, cancel only the same verified WeChat child with the exact
 main-window transient parent using its normal `WM_DELETE_WINDOW` protocol;
 preserve the original error and never press Return or send a draft as cleanup.
 Do not replay abandoned deliveries merely because the picker was dismissed.
+The dedicated runtime must import `python-xlib` before clicking the attachment
+button; otherwise fail before the picker opens. A picker cleanup failure must
+remain visible in the send traceback. The OCR monitor records an exact owned
+picker's first observation and, after 90 seconds under the shared GUI lock,
+revalidates and closes only that picker. It then forces a group rescan. Never
+close another app's picker or a generic WeChat dialog through this recovery.
+Verify the dependency with the supervisor's isolated `HOME`, not the service
+account's login home; the supervisor uses its profile root as `HOME`.
 
 If the desktop supervisor repeatedly reports permission denied for
 `/opt/overtree-labcanvas/output`, the pane has lost the private profile

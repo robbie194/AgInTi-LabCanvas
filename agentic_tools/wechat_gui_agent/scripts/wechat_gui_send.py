@@ -612,6 +612,13 @@ def send_file_to_open_chat(
     path = file_path.expanduser().resolve()
     if not path.is_file():
         raise RuntimeError(f"File does not exist: {path}")
+    try:
+        import Xlib  # noqa: F401 - required by the verified picker close path
+    except ImportError as exc:
+        raise RuntimeError(
+            "WECHAT_FILE_CHOOSER_CLEANUP_UNAVAILABLE: python-xlib is required "
+            "before opening the native attachment picker"
+        ) from exc
 
     focus(env, window)
     preflight_path = out_dir / f"{shot_prefix}-file-preflight.png"
@@ -634,18 +641,28 @@ def send_file_to_open_chat(
         window.y + window.height - 34,
     )
     time.sleep(max(0.5, pause))
-    chooser = wait_for_verified_file_chooser(env, window)
+    chooser = None
     try:
+        chooser = wait_for_verified_file_chooser(env, window)
         paste_path_into_file_chooser(env, path, chooser=chooser, wechat_window=window)
         time.sleep(max(0.5, pause))
         wait_for_wechat_focus_after_picker(env, window)
-    except Exception:
+    except Exception as exc:
         # Selection failures must not leave a native modal blocking later work.
-        # Cleanup is best effort and must preserve the original send error.
+        # Preserve the original error, including any cleanup failure detail.
         try:
-            dismiss_owned_file_chooser(env, window, chooser)
-        except Exception:
-            pass
+            if chooser is None:
+                candidates = [
+                    item for item in visible_window_identities(env)
+                    if item.transient_for == window.wid
+                    and "wechat" in item.window_class.casefold().split()
+                    and is_verified_file_chooser(item, window)
+                ]
+                chooser = candidates[0] if len(candidates) == 1 else None
+            if chooser is not None:
+                dismiss_owned_file_chooser(env, window, chooser)
+        except Exception as cleanup_exc:
+            exc.add_note(f"File picker cleanup also failed: {cleanup_exc}")
         raise
 
     selected_path = out_dir / f"{shot_prefix}-file-selected.png"

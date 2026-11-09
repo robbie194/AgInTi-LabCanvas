@@ -352,6 +352,47 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
             (True, "safety_rescan_due"),
         )
 
+    def test_stale_owned_file_chooser_recovers_once_and_forces_a_new_scan(self):
+        module = load_module()
+        main = types.SimpleNamespace(wid="100")
+        picker = types.SimpleNamespace(wid="200", title="Select File",
+                                       window_class="wechat wechat", transient_for="100")
+        other = types.SimpleNamespace(wid="300", title="Select File",
+                                      window_class="wechat wechat", transient_for="999")
+        state = {"screen_signature": "stable", "group_key": "groups", "last_active_scan_at": 1000}
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(module, "GUI_LOCK", Path(tmp) / "gui.lock"), \
+             mock.patch.object(module.gui, "wait_for_main_wechat_window", return_value=main), \
+             mock.patch.object(module.gui, "visible_window_identities", return_value=[picker, other]), \
+             mock.patch.object(module.gui, "is_verified_file_chooser", return_value=True), \
+             mock.patch.object(module.gui, "dismiss_owned_file_chooser") as dismiss:
+            self.assertFalse(module.recover_stale_file_chooser(":97", state, now=1010))
+            self.assertFalse(module.recover_stale_file_chooser(":97", state, now=1099))
+            dismiss.assert_not_called()
+            self.assertTrue(module.recover_stale_file_chooser(":97", state, now=1100))
+            dismiss.assert_called_once_with(mock.ANY, main, picker)
+            self.assertNotIn("owned_file_chooser", state)
+            state["last_active_scan_at"] = 0
+            self.assertEqual(module.active_scan_decision(
+                state, "stable", "groups", now=1100, rescan_seconds=180),
+                (True, "safety_rescan_due"))
+
+    def test_file_chooser_recovery_never_closes_other_app_or_dialog(self):
+        module = load_module()
+        main = types.SimpleNamespace(wid="100")
+        other = types.SimpleNamespace(wid="300", title="Select File",
+                                      window_class="otherapp", transient_for="100")
+        state = {"owned_file_chooser": {"wid": "300", "first_seen_at": 1}}
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(module, "GUI_LOCK", Path(tmp) / "gui.lock"), \
+             mock.patch.object(module.gui, "wait_for_main_wechat_window", return_value=main), \
+             mock.patch.object(module.gui, "visible_window_identities", return_value=[other]), \
+             mock.patch.object(module.gui, "is_verified_file_chooser", return_value=True), \
+             mock.patch.object(module.gui, "dismiss_owned_file_chooser") as dismiss:
+            self.assertFalse(module.recover_stale_file_chooser(":97", state, now=1000))
+            self.assertNotIn("owned_file_chooser", state)
+            dismiss.assert_not_called()
+
     def test_ocr_trigger_uses_native_copy_for_complete_multiline_bubble(self):
         module = load_module()
         tsv = """level\tpage_num\tblock_num\tpar_num\tline_num\tleft\ttop\twidth\theight\tconf\ttext

@@ -391,6 +391,20 @@ class WeChatGuiSendTests(unittest.TestCase):
 
         paste_path.assert_not_called()
 
+    def test_file_send_requires_picker_cleanup_support_before_opening(self):
+        module = load_wechat_gui_send()
+        with tempfile.TemporaryDirectory() as tmp:
+            file_path = Path(tmp) / "report.pdf"
+            file_path.write_bytes(b"pdf")
+            with mock.patch.dict(sys.modules, {"Xlib": None}), \
+                 mock.patch.object(module, "click") as click:
+                with self.assertRaisesRegex(RuntimeError, "CLEANUP_UNAVAILABLE"):
+                    module.send_file_to_open_chat(
+                        {}, module.Window("main", 0, 0, 1000, 700),
+                        module.TargetSpec("test", "test", "test"),
+                        file_path, Path(tmp), "preflight", pause=0.1)
+            click.assert_not_called()
+
     def test_file_chooser_identity_must_be_distinct_and_native(self):
         module = load_wechat_gui_send()
         main = module.Window("main", 0, 0, 1000, 700)

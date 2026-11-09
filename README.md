@@ -145,6 +145,9 @@ When OCR separates the `@` glyph from `OverTree`, the name may locate a
 candidate bubble, but only native WeChat Copy confirming the exact mention
 allows the message into Cloud.
 Cloud task/result polling continues while the GUI is idle or blocked.
+File delivery requires `python-xlib` in the dedicated WeChat runtime before
+opening the native picker. If an owned picker remains open for 90 seconds,
+the OCR monitor closes that exact picker and rescans the visible groups.
 The guide includes a loopback-only SSH tunnel and `wechat_agent_profile.sh
 add-group`, which creates one private state/config per exact group.
 The WeChat preview (`http://127.0.0.1:6108/`) includes an explicit UTF-8

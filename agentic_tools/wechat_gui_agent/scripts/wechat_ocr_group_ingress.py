@@ -190,6 +190,16 @@ def scan_display_groups(
     monitor_state = load_state(monitor_path)
     group_key = configured_group_key(prepared)
     try:
+        if recover_stale_file_chooser(display, monitor_state, now=time.time()):
+            monitor_state["last_active_scan_at"] = 0
+    except Exception as exc:
+        results.append({
+            "ok": False,
+            "display": display,
+            "monitor": "file_chooser_recovery",
+            "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+        })
+    try:
         observation = observe_passive_screen(display)
     except Exception as exc:
         observation = None
@@ -254,6 +264,38 @@ def scan_display_groups(
 def passive_state_path(display: str) -> Path:
     key = hashlib.sha256(str(display).encode("utf-8")).hexdigest()[:12]
     return PRIVATE / f"{PASSIVE_STATE_PREFIX}-{key}.json"
+
+
+def recover_stale_file_chooser(
+    display: str, state: dict[str, Any], *, now: float,
+    stale_seconds: float = 90.0,
+) -> bool:
+    """Cancel only a persistent file picker owned by this WeChat window."""
+    env = {**os.environ, "DISPLAY": str(display), "WECHAT_DISPLAY": str(display)}
+    with GUI_LOCK.open("a", encoding="utf-8") as lock:
+        acquire_lock(lock, 15)
+        main = gui.wait_for_main_wechat_window(env, timeout=1)
+        if not main:
+            return False
+        pickers = [
+            item for item in gui.visible_window_identities(env)
+            if item.transient_for == main.wid
+            and "wechat" in item.window_class.casefold().split()
+            and gui.is_verified_file_chooser(item, main)
+        ]
+        if len(pickers) != 1:
+            state.pop("owned_file_chooser", None)
+            return False
+        picker = pickers[0]
+        observed = state.get("owned_file_chooser") or {}
+        if observed.get("wid") != picker.wid:
+            state["owned_file_chooser"] = {"wid": picker.wid, "first_seen_at": now}
+            return False
+        if now - float(observed.get("first_seen_at") or now) < stale_seconds:
+            return False
+        gui.dismiss_owned_file_chooser(env, main, picker)
+        state.pop("owned_file_chooser", None)
+        return True
 
 
 def configured_group_key(prepared: list[tuple[dict[str, Any], Path]]) -> str:
