@@ -2131,6 +2131,11 @@ revalidates and closes only that picker. It then forces a group rescan. Never
 close another app's picker or a generic WeChat dialog through this recovery.
 Verify the dependency with the supervisor's isolated `HOME`, not the service
 account's login home; the supervisor uses its profile root as `HOME`.
+After installing it into an already running profile, restart only the OCR
+monitor child so Python adds the newly created user site to `sys.path`.
+The live recovery check opened an exact owned picker without choosing a file,
+confirmed its timed closure by the restarted monitor, and observed a subsequent
+group scan with no picker remaining.
 
 If the desktop supervisor repeatedly reports permission denied for
 `/opt/overtree-labcanvas/output`, the pane has lost the private profile
