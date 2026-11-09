@@ -2756,6 +2756,14 @@ expose diagnostics or chat content publicly. Existing bounded retries, uncertain
 send handling, exact-target guards, text-only intake and common Cloud artifact
 selection remain unchanged.
 
+For a short bubble whose padded edge has no Copy menu, retry native Copy once
+at the OCR line center. If both points fail, retain it for a later scan.
+On restart or allowlist change, a recorded Copy failure prevents the first
+visible scan from seeding that unresolved question as old history.
+New-group discovery may strip a short OCR punctuation prefix from a visible
+title row (for example `@ = OverTree-K6L5` when the badge is included), but
+must still require a live Cloud registration and exact opened-title guard.
+
 ## Last-bubble clipping in repeated group turns (2026-11-08)
 
 The compact 908x666 Linux client places the composer 145px above the bottom.

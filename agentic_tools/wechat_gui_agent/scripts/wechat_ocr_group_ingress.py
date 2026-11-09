@@ -610,6 +610,7 @@ def scan_group(
             if fingerprint not in {item[0] for item in observed} and not ocr_fingerprint_is_recent(state, fingerprint, text):
                 if (seed_only and not unread_gate_passed
                     and config.get("binding_status") != "pending"
+                    and not state.get("ocr_last_copy_failed_count")
                     and message.get("method") != "ocr_binding_code"):
                     # A process restart or newly added group must establish a
                     # visible-message baseline without replaying old questions.
@@ -906,6 +907,10 @@ def ocr_triggered_message(
             copy_enabled = str(os.environ.get("WECHAT_OCR_GROUP_NATIVE_COPY", "true")).lower() != "false"
             if point and copy_enabled:
                 copied = copy_text_bubble(env, window, *point, evidence=evidence)
+                if not copied:
+                    center = ocr_line_center_point(line, region, scale=1.6)
+                    if center and center != point:
+                        copied = copy_text_bubble(env, window, *center, evidence=evidence)
             if copied and any(prefix.casefold() in copied.casefold() for prefix in prefixes):
                 normalized = normalize_message_text(copied)
                 if looks_like_ocr_debug_text(normalized):
@@ -1013,6 +1018,23 @@ def ocr_line_screen_point(
         # opens the full-message menu, including for multiline messages.
         region["left"] + round(right / scale) + 5,
         region["top"] + round(bottom / scale) + 1,
+    )
+
+
+def ocr_line_center_point(
+    line: dict[str, Any], region: dict[str, int], *, scale: float,
+) -> tuple[int, int] | None:
+    """Retry native Copy inside a short bubble when its padded edge misses."""
+    try:
+        left, top = int(line["left"]), int(line["top"])
+        right, bottom = int(line["right"]), int(line["bottom"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if right <= left or bottom <= top or scale <= 0:
+        return None
+    return (
+        region["left"] + round((left + right) / (2 * scale)),
+        region["top"] + round((top + bottom) / (2 * scale)),
     )
 
 
@@ -1293,8 +1315,10 @@ def registered_titles_from_lines(lines: list[dict[str, Any]]) -> set[str]:
     titles: set[str] = set()
     for line in lines:
         # Title identity starts at the row/header, not in an arbitrary preview
-        # or quoted line containing a generated-looking identifier.
-        match = pattern.match(str(line["text"]).strip())
+        # or quoted line containing a generated-looking identifier. Tesseract
+        # can prepend a row's unread badge/icon as punctuation ("@ = ").
+        candidate = re.sub(r"^\W{1,6}(?=Over\s*Tree)", "", str(line["text"]).strip(), flags=re.IGNORECASE)
+        match = pattern.match(candidate)
         if match:
             value = "".join(match.group(0).split())
             titles.add("OverTree-" + value[len("OverTree-"):].upper())

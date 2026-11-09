@@ -138,6 +138,10 @@ skip unchanged screens, then uses OCR to locate a triggered bubble and the
 nearby magnified native Copy menu plus the isolated X clipboard to read its
 full text. Addressed questions require a successful native Copy: a failed copy
 stays unread for a later scan instead of forwarding a truncated OCR line.
+For short bubbles, a failed edge Copy retries once at the OCR line center.
+After a failed Copy, a restart does not seed the still-visible question as old history.
+Visible new-group discovery tolerates OCR punctuation from the unread badge
+before a registered group title; Cloud and the opened chat title still verify it.
 The history crop includes the final bubble directly above the compact Linux
 composer; existing configs using the old 170px bottom margin are migrated to
 145px so a short follow-up question is not clipped out of intake.

@@ -284,7 +284,9 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
             {"text": "OverTree - WXYZ 14:32"},
             {"text": "OverTree-ABCDX"}, {"text": "Robbie: OverTree-WXYZ"},
             {"text": "OverTree-G-7K4Q2M"}, {"text": "OtherGroup"},
-        ]), {"OverTree-2AAC", "OverTree-ABCD", "OverTree-WXYZ", "OverTree-G-7K4Q2M"})
+            {"text": "@ = OverTree-K6L5"},
+            {"text": "Robbie: @ = OverTree-N8Q4"},
+        ]), {"OverTree-2AAC", "OverTree-ABCD", "OverTree-WXYZ", "OverTree-G-7K4Q2M", "OverTree-K6L5"})
 
     def test_ocr_debug_dump_is_rejected_as_message_text(self):
         module = load_module()
@@ -415,6 +417,32 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         module.copy_text_bubble.assert_called_once_with(
             {"DISPLAY": ":97"}, window, 265, 111, evidence=Path(tmp)
         )
+
+    def test_short_bubble_retries_native_copy_at_line_center(self):
+        module = load_module()
+        line = {"text": "@OverTree hi", "left": 200, "top": 40, "right": 300, "bottom": 70}
+        window = types.SimpleNamespace(x=0, y=0, width=1000, height=800)
+        config = {"personal_group_cloud": {"trigger_prefixes": ["@OverTree"]}}
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(module.gui, "screenshot"), \
+             mock.patch.object(module, "run_command", return_value=types.SimpleNamespace(stdout="")), \
+             mock.patch.object(module, "parse_ocr_lines", return_value=[line]), \
+             mock.patch.object(module, "visible_media_messages", return_value=[]), \
+             mock.patch.object(module, "copy_text_bubble", side_effect=["", "@OverTree hi"]) as copy:
+            result = module.ocr_triggered_message({}, window, config, Path(tmp), all_messages=True)
+        self.assertEqual([item["text"] for item in result["messages"]], ["@OverTree hi"])
+        self.assertEqual(copy.call_count, 2)
+        self.assertNotEqual(copy.call_args_list[0].args[2:4], copy.call_args_list[1].args[2:4])
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(module.gui, "screenshot"), \
+             mock.patch.object(module, "run_command", return_value=types.SimpleNamespace(stdout="")), \
+             mock.patch.object(module, "parse_ocr_lines", return_value=[line]), \
+             mock.patch.object(module, "visible_media_messages", return_value=[]), \
+             mock.patch.object(module, "copy_text_bubble", return_value=""):
+            result = module.ocr_triggered_message({}, window, config, Path(tmp), all_messages=True)
+        self.assertEqual(result["messages"], [])
+        self.assertEqual(result["copy_failed_count"], 1)
 
     def test_split_ocr_mention_uses_native_copy_to_confirm_exact_trigger(self):
         module = load_module()
@@ -1081,6 +1109,35 @@ class WeChatOcrGroupIngressTests(unittest.TestCase):
         self.assertFalse(result["submitted"])
         self.assertEqual(poll_cloud.call_args.args[2], [])
         self.assertEqual(len(saved["ocr_seen_fingerprints"]), 1)
+
+    def test_initial_scan_retries_previous_failed_native_copy(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            private = Path(tmp) / "private"
+            private.mkdir()
+            module.PRIVATE = private
+            module.GUI_LOCK = private / "wechat_gui_send.lock"
+            state_path = private / "group.state.json"
+            state_path.write_text('{"ocr_last_copy_failed_count": 1}', encoding="utf-8")
+            config = {
+                "enabled": True, "chat_name": "OverTree-BPHL", "chatroom_id": "ocr-title-test",
+                "state_path": str(state_path), "binding_status": "bound",
+                "personal_group_cloud": {"enabled": True, "trigger_prefixes": ["@OverTree"]},
+            }
+            args = types.SimpleNamespace(display=":97", require_unread_badge=False)
+            window = types.SimpleNamespace(x=0, y=0, width=916, height=700)
+            with mock.patch.object(module.gui, "require_tools"), \
+                 mock.patch.object(module.gui, "wait_for_main_wechat_window", return_value=window), \
+                 mock.patch.object(module.gui, "assert_no_blocking_wechat_dialog"), \
+                 mock.patch.object(module, "has_unread_badge", return_value=False), \
+                 mock.patch.object(module.gui, "open_target", return_value={"ok": True}), \
+                 mock.patch.object(module, "ocr_triggered_message", return_value={
+                     "method": "visible_batch", "messages": [{"text": "@OverTree hi", "method": "native_copy"}],
+                 }), \
+                 mock.patch.object(module, "run_cloud_once", return_value={"state": {}, "metrics": {}}) as cloud:
+                result = module.scan_group(args, config, private / "group.json", seed_only=True)
+        self.assertFalse(result["seeded"])
+        self.assertEqual([row["content"] for row in cloud.call_args.args[2]], ["@OverTree hi"])
 
     def test_registered_group_red_badge_scan_never_uses_global_search(self):
         module = load_module()
